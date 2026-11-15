@@ -167,6 +167,12 @@ func parseCGIBody(body string) Data {
 	return data
 }
 
+// Get fetches an arbitrary path of the router web UI (read-only). Use it for
+// the .htm pages and static .js files that contain the form logic.
+func (c *Client) Get(ctx context.Context, path string) (string, error) {
+	return httpGet(ctx, c.client, c.base+path)
+}
+
 // CGI fetches a cgi/*.js data file and parses its addCfg calls.
 func (c *Client) CGI(ctx context.Context, page string) (Data, error) {
 	now := time.Now().UnixMilli()

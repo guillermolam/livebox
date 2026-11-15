@@ -1,10 +1,26 @@
 package commands
 
-import "github.com/spf13/cobra"
+import (
+	"fmt"
 
-// RebootCommand reboots the Livebox.
+	"github.com/spf13/cobra"
+)
+
+// RebootCommand reboots the Livebox. The connection drops for a couple of
+// minutes while the router restarts.
 func RebootCommand() *cobra.Command {
-	return writeStub("reboot", "Reboots the livebox")
+	return &cobra.Command{
+		Use:   "reboot",
+		Short: "Reboots the livebox",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := clientFromConfig(cmd)
+			if err != nil {
+				return err
+			}
+			fmt.Println("Rebooting the Livebox...")
+			return client.Reboot(cmd.Context())
+		},
+	}
 }
 
 // PhoneCommand shows recent phone calls.

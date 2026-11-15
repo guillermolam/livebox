@@ -18,16 +18,8 @@ func runCommand(t *testing.T, cmd *cobra.Command, args []string) error {
 
 func TestWriteCommandsReturnNotImplemented(t *testing.T) {
 	writeCommands := [][]string{
-		{"reboot"},
 		{"phone"},
-		{"wifi", "enable"},
-		{"wifi", "disable"},
 		{"wifi", "config", "--ssid", "x"},
-		{"dmz", "set", "192.168.1.1"},
-		{"dmz", "rm"},
-		{"pinhole", "ls"},
-		{"pinhole", "set", "x"},
-		{"pinhole", "rm", "x"},
 	}
 
 	rootCmd := &cobra.Command{Use: "livebox", SilenceUsage: true, SilenceErrors: true}

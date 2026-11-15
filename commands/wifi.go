@@ -22,12 +22,28 @@ func WiFiCommand() *cobra.Command {
 
 	cmd.AddCommand(
 		wifiStatusCmd(),
-		writeStub("enable", "Enable WLAN"),
-		writeStub("disable", "Disable WLAN"),
+		wifiEnableCmd("enable", "Enable WLAN", true),
+		wifiEnableCmd("disable", "Disable WLAN", false),
 		writeStub("config", "Configure WLAN settings"),
 	)
 
 	return cmd
+}
+
+// wifiEnableCmd builds the enable/disable subcommands. Both bands' primary
+// BSSes are switched together, as the web UI does.
+func wifiEnableCmd(use, short string, enable bool) *cobra.Command {
+	return &cobra.Command{
+		Use:   use,
+		Short: short,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := clientFromConfig(cmd)
+			if err != nil {
+				return err
+			}
+			return client.WiFiEnable(cmd.Context(), enable)
+		},
+	}
 }
 
 func wifiStatusCmd() *cobra.Command {

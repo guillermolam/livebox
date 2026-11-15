@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -65,7 +66,12 @@ type formField struct {
 
 // apply builds and submits one apply_abstract.cgi form. The page is fetched
 // fresh so its spacer provides the key, IV and httoken, mirroring the browser.
+// submitButton defaults to page; the reboot flow overrides it ("index.htm").
 func (c *Client) apply(ctx context.Context, page, action, actionParams string, fields []formField) error {
+	return c.applySubmit(ctx, page, page, action, actionParams, fields)
+}
+
+func (c *Client) applySubmit(ctx context.Context, page, submitButton, action, actionParams string, fields []formField) error {
 	body, err := httpGet(ctx, c.client, c.base+"/"+page)
 	if err != nil {
 		return fmt.Errorf("fetching %s: %w", page, err)
@@ -89,7 +95,7 @@ func (c *Client) apply(ctx context.Context, page, action, actionParams string, f
 		"action":        {""},
 		"action_params": {""},
 		"httoken":       {token},
-		"submit_button": {page},
+		"submit_button": {submitButton},
 	}
 	if action != "" {
 		enc, err := encode(action, key, iv)
@@ -149,6 +155,12 @@ func (c *Client) apply(ctx context.Context, page, action, actionParams string, f
 }
 
 // fieldID resolves the addCfg id of one key, erroring when absent.
+// sortFields keeps the form deterministic for tests and logs.
+func sortFields(fields []formField) {
+	sort.Slice(fields, func(i, j int) bool { return fields[i].ID < fields[j].ID })
+}
+
+// fieldID resolves the addCfg id of one key.
 func fieldID(data Data, key string) (string, error) {
 	id := data.ID(key)
 	if id == "" {
@@ -429,4 +441,207 @@ func (c *Client) DNSRm(ctx context.Context, hostname string) error {
 		{hostID, ""},
 		{ipID, ""},
 	})
+}
+
+// WiFiEnable turns the primary Wi-Fi BSSes of both bands on or off. Captured
+// from the web UI (action ui_wireless from advanced_wifi.htm): it writes
+// wl_enable24G/wl_enable5G plus wl_enable_change=1 so the radio restarts.
+//
+// WARNING: applying this from a Wi-Fi-connected machine drops the connection
+// while the radios restart.
+func (c *Client) WiFiEnable(ctx context.Context, enable bool) error {
+	data, err := c.CGI(ctx, "wlan_combine")
+	if err != nil {
+		return err
+	}
+	value := "0"
+	if enable {
+		value = "1"
+	}
+	b24ID, err := fieldID(data, "wl_enable24G")
+	if err != nil {
+		return err
+	}
+	b5ID, err := fieldID(data, "wl_enable5G")
+	if err != nil {
+		return err
+	}
+	chgID, err := fieldID(data, "wl_enable_change")
+	if err != nil {
+		return err
+	}
+	return c.apply(ctx, "advanced_wifi.htm", "ui_wireless", "", []formField{
+		{b24ID, value},
+		{b5ID, value},
+		{chgID, "1"},
+	})
+}
+
+// DMZSet enables the DMZ and points it at hostIP (action ui_firewall from
+// advanced_network_dmz.htm).
+func (c *Client) DMZSet(ctx context.Context, hostIP string) error {
+	data, err := c.CGI(ctx, "fw_dmz_osp")
+	if err != nil {
+		return err
+	}
+	enableID, err := fieldID(data, "dmz_enable")
+	if err != nil {
+		return err
+	}
+	hostID, err := fieldID(data, "host_ip")
+	if err != nil {
+		return err
+	}
+	return c.apply(ctx, "advanced_network_dmz.htm", "ui_firewall", "", []formField{
+		{enableID, "1"},
+		{hostID, hostIP},
+	})
+}
+
+// DMZRm disables the DMZ (host_ip cleared; the captured UI submit omits
+// dmz_enable in this case).
+func (c *Client) DMZRm(ctx context.Context) error {
+	data, err := c.CGI(ctx, "fw_dmz_osp")
+	if err != nil {
+		return err
+	}
+	hostID, err := fieldID(data, "host_ip")
+	if err != nil {
+		return err
+	}
+	return c.apply(ctx, "advanced_network_dmz.htm", "ui_firewall", "", []formField{
+		{hostID, ""},
+	})
+}
+
+// firewallRuleFields lists the per-slot cfg names of the IPv4 pinhole rules,
+// in the order the web UI writes them.
+var firewallRuleFields = []string{
+	"firewall_rules_app", "firewall_rules_proto", "firewall_rules_startip",
+	"firewall_rules_startmask", "firewall_rules_srcport", "firewall_rules_endip",
+	"firewall_rules_endmask", "firewall_rules_desport", "firewall_rules_action",
+	"firewall_rules_enable",
+}
+
+// Pinholes returns the IPv4 pinhole (firewall customization) rules.
+func (c *Client) Pinholes(ctx context.Context) ([]Pinhole, error) {
+	data, err := c.CGI(ctx, "firewall_customize")
+	if err != nil {
+		return nil, err
+	}
+	rules := []Pinhole{}
+	for slot := 0; slot < 32; slot++ {
+		enable := fmt.Sprintf("firewall_rules_enable%d", slot)
+		if !data.Has(enable) {
+			break
+		}
+		if data.Get(enable) == "" {
+			continue
+		}
+		rules = append(rules, Pinhole{
+			ID:         data.Get(fmt.Sprintf("firewall_rules_app%d", slot)),
+			Protocol:   data.Get(fmt.Sprintf("firewall_rules_proto%d", slot)),
+			SourceIP:   data.Get(fmt.Sprintf("firewall_rules_startip%d", slot)),
+			SourceMask: data.Get(fmt.Sprintf("firewall_rules_startmask%d", slot)),
+			SourcePort: data.Get(fmt.Sprintf("firewall_rules_srcport%d", slot)),
+			DestIP:     data.Get(fmt.Sprintf("firewall_rules_endip%d", slot)),
+			DestMask:   data.Get(fmt.Sprintf("firewall_rules_endmask%d", slot)),
+			DestPort:   data.Get(fmt.Sprintf("firewall_rules_desport%d", slot)),
+			Action:     data.Get(fmt.Sprintf("firewall_rules_action%d", slot)),
+			Slot:       slot,
+		})
+	}
+	return rules, nil
+}
+
+// Pinhole represents one IPv4 pinhole rule from firewall_customize.js.
+type Pinhole struct {
+	ID         string
+	Protocol   string
+	SourceIP   string
+	SourceMask string
+	SourcePort string
+	DestIP     string
+	DestMask   string
+	DestPort   string
+	Action     string
+	Slot       int
+}
+
+// PinholeSet adds an IPv4 pinhole rule in the first free slot (the web UI's
+// save() flow: action ui_firewall_all, form from advanced_firewall_customize.htm).
+func (c *Client) PinholeSet(ctx context.Context, name, protocol, sourceIP, sourceMask, sourcePort, destIP, destMask, destPort, action string) error {
+	data, err := c.CGI(ctx, "firewall_customize")
+	if err != nil {
+		return err
+	}
+	// The UI picks the first slot whose firewall_rules_enable is empty.
+	slot := -1
+	for i := 0; data.Has(fmt.Sprintf("firewall_rules_enable%d", i)); i++ {
+		if data.Get(fmt.Sprintf("firewall_rules_enable%d", i)) == "" {
+			slot = i
+			break
+		}
+	}
+	if slot == -1 {
+		return fmt.Errorf("no free pinhole slot")
+	}
+	values := map[string]string{
+		"firewall_rules_app":       name,
+		"firewall_rules_proto":     protocol,
+		"firewall_rules_startip":   sourceIP,
+		"firewall_rules_startmask": sourceMask,
+		"firewall_rules_srcport":   sourcePort,
+		"firewall_rules_endip":     destIP,
+		"firewall_rules_endmask":   destMask,
+		"firewall_rules_desport":   destPort,
+		"firewall_rules_action":    action,
+		"firewall_rules_enable":    "1",
+	}
+	fields := make([]formField, 0, len(values))
+	for _, prefix := range firewallRuleFields {
+		id := data.ID(fmt.Sprintf("%s%d", prefix, slot))
+		if id == "" {
+			return fmt.Errorf("no addCfg id for key %q", fmt.Sprintf("%s%d", prefix, slot))
+		}
+		fields = append(fields, formField{id, values[prefix]})
+	}
+	sortFields(fields)
+	return c.apply(ctx, "advanced_firewall_customize.htm", "ui_firewall_all", "", fields)
+}
+
+// PinholeRm removes the IPv4 pinhole rule with the given name by clearing all
+// of its slot's fields, mirroring DelRule().
+func (c *Client) PinholeRm(ctx context.Context, name string) error {
+	data, err := c.CGI(ctx, "firewall_customize")
+	if err != nil {
+		return err
+	}
+	slot := -1
+	for i := 0; data.Has(fmt.Sprintf("firewall_rules_enable%d", i)); i++ {
+		if data.Get(fmt.Sprintf("firewall_rules_app%d", i)) == name {
+			slot = i
+			break
+		}
+	}
+	if slot == -1 {
+		return fmt.Errorf("no pinhole rule named %q", name)
+	}
+	fields := make([]formField, 0, len(firewallRuleFields))
+	for _, prefix := range firewallRuleFields {
+		id := data.ID(fmt.Sprintf("%s%d", prefix, slot))
+		if id == "" {
+			return fmt.Errorf("no addCfg id for key %q", fmt.Sprintf("%s%d", prefix, slot))
+		}
+		fields = append(fields, formField{id, ""})
+	}
+	sortFields(fields)
+	return c.apply(ctx, "advanced_firewall_customize.htm", "ui_firewall_all", "", fields)
+}
+
+// Reboot restarts the router (action reboot, captured from
+// support_restart.htm: cmdparam "RebootFromGUI", submit_button "index.htm").
+// Note the connection drops while the router restarts.
+func (c *Client) Reboot(ctx context.Context) error {
+	return c.applySubmit(ctx, "support_restart.htm", "index.htm", "reboot", "RebootFromGUI", nil)
 }

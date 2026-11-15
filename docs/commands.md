@@ -1,5 +1,8 @@
 # Command reference
 
+← [README](../README.md) · protocol background in
+[protocol.md](protocol.md) · write payloads in [writes.md](writes.md)
+
 All commands accept the global flags:
 
 | Flag | Default | Meaning |
@@ -167,6 +170,51 @@ livebox api /js/global.js            # router JavaScript (protocol source)
 
 With a bare name it fetches `GET /cgi/cgi_<name>.js` and prints the raw
 JS body; with a leading `/` it fetches that path verbatim.
+
+### `audit [all|<ip|mac|name>]` — security audit
+
+```sh
+livebox audit                        # client list + exposure summary
+livebox audit 192.168.1.10           # focus on one device
+livebox audit --scan                 # add active port scan (needs manifest)
+livebox audit --scan --listen 10s    # include passive discovery
+livebox audit --output markdown      # full hardening report
+```
+
+The audit combines router-reported client data with exposure CGIs (UPnP,
+DMZ, port forwards, DNS, static leases) and runs a rule engine that ranks
+findings by severity. Active TCP scanning and passive discovery require an
+approved scope manifest:
+
+```sh
+livebox audit approve                # approve every online client
+livebox audit approve 192.168.1.10   # approve a single device
+```
+
+The manifest is saved to `~/.config/livebox-audit-scope.json` and acts as a
+hard gate: the scanner refuses to probe any IP or MAC that is not in the
+manifest and whose IP has not changed since approval.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--manifest` | `~/.config/livebox-audit-scope.json` | Approved scope manifest path |
+| `--scan` | `false` | Run active TCP port scan against approved devices |
+| `--listen` | `0s` | Listen for multicast/broadcast discovery traffic |
+| `--output` | `table` | `table`, `json`, or `markdown` |
+
+### `sniff` — passive discovery capture
+
+```sh
+livebox sniff --duration 30s
+```
+
+Listens for mDNS, SSDP, LLMNR, and NBNS announcements on the LAN and prints
+the observed sources and sanitized payloads. No packets are sent and no
+scope manifest is required.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--duration` | `10s` | Capture duration (`0` = until Ctrl-C) |
 
 ---
 

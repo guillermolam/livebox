@@ -1,6 +1,8 @@
 package commands
 
 import (
+	"fmt"
+
 	"github.com/guillermolam/livebox/utils"
 	"github.com/maelvls/undent"
 	"github.com/spf13/cobra"
@@ -21,8 +23,8 @@ func StaticLeaseCommand() *cobra.Command {
 
 	cmd.AddCommand(
 		staticLeaseLsCmd(),
-		writeStub("set", "Set a static lease"),
-		writeStub("rm", "Remove a static lease"),
+		staticLeaseSetCmd(),
+		staticLeaseRmCmd(),
 	)
 
 	return cmd
@@ -53,6 +55,52 @@ func staticLeaseLsCmd() *cobra.Command {
 			}
 			utils.PrintTable([]string{"Name", "MAC address", "IP address", "Active"}, rows)
 			return nil
+		},
+	}
+}
+
+var (
+	staticLeaseName string
+	staticLeaseMAC  string
+	staticLeaseIP   string
+)
+
+func staticLeaseSetCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "set",
+		Short: "Set a static lease",
+		Example: undent.Undent(`
+			static-lease set --name nas --mac aa:bb:cc:dd:ee:ff --ip 192.168.1.10
+		`),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if staticLeaseMAC == "" || staticLeaseIP == "" {
+				return fmt.Errorf("--mac and --ip are required")
+			}
+
+			client, err := clientFromConfig(cmd)
+			if err != nil {
+				return err
+			}
+			return client.StaticLeaseSet(cmd.Context(), staticLeaseMAC, staticLeaseIP, staticLeaseName)
+		},
+	}
+	cmd.Flags().StringVar(&staticLeaseName, "name", "", "Device name")
+	cmd.Flags().StringVar(&staticLeaseMAC, "mac", "", "MAC address")
+	cmd.Flags().StringVar(&staticLeaseIP, "ip", "", "IP address to reserve")
+	return cmd
+}
+
+func staticLeaseRmCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "rm <mac>",
+		Short: "Remove a static lease by its MAC address",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := clientFromConfig(cmd)
+			if err != nil {
+				return err
+			}
+			return client.StaticLeaseRm(cmd.Context(), args[0])
 		},
 	}
 }

@@ -177,11 +177,20 @@ func parsePortForwards(data Data) []PortForward {
 			continue
 		}
 		description := g[fmt.Sprintf("nat_description%d", i)]
+		// The nat_* table numbers protocols 0=tcp, 1=udp (the pcp_rule_*
+		// table uses IP protocol numbers 6/17); translate for display.
+		proto := g[fmt.Sprintf("nat_protocol%d", i)]
+		switch proto {
+		case "0":
+			proto = "6"
+		case "1":
+			proto = "17"
+		}
 		rules = append(rules, PortForward{
 			ID:          description,
 			Description: description,
 			Enabled:     g[fmt.Sprintf("nat_enable%d", i)] == "1",
-			Protocol:    protocolName(g[fmt.Sprintf("nat_protocol%d", i)]),
+			Protocol:    protocolName(proto),
 			PublicPort:  g[fmt.Sprintf("nat_public_port%d", i)],
 			PrivateIP:   g[fmt.Sprintf("nat_private_ip%d", i)],
 			PrivatePort: g[fmt.Sprintf("nat_private_port%d", i)],

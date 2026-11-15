@@ -19,9 +19,11 @@ type Client struct {
 	base   string
 	client *http.Client
 	token  string
+	key    []byte // session AES key from the login page spacer
+	iv     []byte // session CBC IV from the login page spacer
 }
 
-var addCfgRe = regexp.MustCompile(`addCfg\("([^"]+)",\s*"[^"]*",\s*"([^"]*)"\)`)
+var addCfgRe = regexp.MustCompile(`addCfg\("([^"]+)",\s*"([^"]*)",\s*"([^"]*)"\)`)
 
 // NewClient logs in and extracts the httoken needed for subsequent cgi/*.js
 // requests.
@@ -105,6 +107,8 @@ func NewClient(ctx context.Context, address, username, password string) (*Client
 		base:   base,
 		client: client,
 		token:  token,
+		key:    key,
+		iv:     iv,
 	}, nil
 }
 
@@ -127,15 +131,23 @@ func httpGet(ctx context.Context, client *http.Client, url string) (string, erro
 }
 
 // Data holds the key/value pairs parsed from a cgi/*.js response, plus the
-// raw body for files that embed data outside addCfg calls.
+// raw body for files that embed data outside addCfg calls. Each addCfg entry
+// also carries a numeric cfg ID (addCfg("name", "id", "value")) which is
+// needed to address fields in write requests.
 type Data struct {
 	entries map[string]string
+	ids     map[string]string
 	Raw     string
 }
 
 // Get returns the value for a key, or the empty string if absent.
 func (d Data) Get(key string) string {
 	return d.entries[key]
+}
+
+// ID returns the numeric cfg ID for a key, or the empty string if absent.
+func (d Data) ID(key string) string {
+	return d.ids[key]
 }
 
 // Has reports whether a key is present, even if its value is empty.
@@ -147,9 +159,10 @@ func (d Data) Has(key string) bool {
 // parseCGIBody parses the addCfg("name", "id", "value") calls of a cgi/*.js
 // response body.
 func parseCGIBody(body string) Data {
-	data := Data{entries: make(map[string]string), Raw: body}
+	data := Data{entries: make(map[string]string), ids: make(map[string]string), Raw: body}
 	for _, m := range addCfgRe.FindAllStringSubmatch(body, -1) {
-		data.entries[m[1]] = m[2]
+		data.entries[m[1]] = m[3]
+		data.ids[m[1]] = m[2]
 	}
 	return data
 }

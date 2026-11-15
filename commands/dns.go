@@ -15,8 +15,39 @@ func DNSCommand() *cobra.Command {
 			dns ls
 		`),
 	}
-	cmd.AddCommand(dnsLsCmd(), writeStub("set", "Set the name of a device"))
+	cmd.AddCommand(dnsLsCmd(), dnsSetCmd(), dnsRmCmd())
 	return cmd
+}
+
+func dnsSetCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "set <hostname> <ip>",
+		Short: "Set a static DNS entry",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := clientFromConfig(cmd)
+			if err != nil {
+				return err
+			}
+			return client.DNSSet(cmd.Context(), args[0], args[1])
+		},
+	}
+	return cmd
+}
+
+func dnsRmCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "rm <hostname>",
+		Short: "Remove a static DNS entry by its hostname",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := clientFromConfig(cmd)
+			if err != nil {
+				return err
+			}
+			return client.DNSRm(cmd.Context(), args[0])
+		},
+	}
 }
 
 func dnsLsCmd() *cobra.Command {

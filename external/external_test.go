@@ -107,3 +107,46 @@ func TestNaabuFakeBinary(t *testing.T) {
 		t.Fatalf("expected 1 record, got %d", len(records))
 	}
 }
+
+func TestKatanaParse(t *testing.T) {
+	out := `{"url":"http://192.168.1.10/login","method":"GET"}` + "\n"
+	records := parseKatanaOutput("http://192.168.1.10", "scope-test", []byte(out))
+	if len(records) != 1 || records[0].Stage != StageKatana {
+		t.Fatalf("unexpected katana records: %+v", records)
+	}
+}
+
+func TestNucleiParse(t *testing.T) {
+	out := `{"host":"192.168.1.10","template-id":"test-template","info":{"severity":"high"}}` + "\n"
+	records := parseNucleiOutput([]string{"192.168.1.10"}, "scope-test", []string{"test-template"}, []byte(out))
+	if len(records) != 1 || records[0].Stage != StageNuclei {
+		t.Fatalf("unexpected nuclei records: %+v", records)
+	}
+	if records[0].FindingID == "" {
+		t.Fatal("expected finding ID")
+	}
+}
+
+func TestSubfinderParse(t *testing.T) {
+	out := `{"host":"www.example.com","source":"crtsh","input":"example.com"}` + "\n"
+	records := parseSubfinderOutput("example.com", "scope-test", []byte(out))
+	if len(records) != 1 || records[0].Stage != StageSubfinder {
+		t.Fatalf("unexpected subfinder records: %+v", records)
+	}
+}
+
+func TestUncoverParse(t *testing.T) {
+	out := `{"ip":"192.168.1.1","port":"80"}` + "\n"
+	records := parseUncoverOutput("example.com", "scope-test", []byte(out))
+	if len(records) != 1 || records[0].Confidence != Inconclusive {
+		t.Fatalf("unexpected uncover records: %+v", records)
+	}
+}
+
+func TestInteractshParse(t *testing.T) {
+	out := `{"protocol":"http","unique-id":"abc","full-id":"abc.example","remote-address":"192.168.1.1","timestamp":"2026-01-01T00:00:00Z"}` + "\n"
+	records := parseInteractshOutput("scope-test", []byte(out))
+	if len(records) != 1 || records[0].Stage != StageInteract {
+		t.Fatalf("unexpected interactsh records: %+v", records)
+	}
+}

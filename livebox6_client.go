@@ -197,7 +197,8 @@ func (c *livebox6Client) Devices(ctx context.Context) ([]livebox6Device, error) 
 	for _, page := range []string{"infoLan", "clients"} {
 		data, err := c.getCGI(ctx, page)
 		if err != nil {
-			return nil, err
+			errs = append(errs, err)
+			continue
 		}
 		devices, err := livebox6ParseDevices(data.raw)
 		if err == nil {

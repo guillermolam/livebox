@@ -52,6 +52,8 @@ func Run() {
 		commands.DMZCommand(),
 		commands.WiFiCommand(),
 		commands.DNSCommand(),
+		commands.AuditCommand(),
+		commands.SniffCommand(),
 	)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)

@@ -1,4 +1,4 @@
-package main
+package api
 
 import (
 	"context"
@@ -13,19 +13,19 @@ import (
 	"time"
 )
 
-// livebox6Client talks to a Livebox 6/7 (Arcadyan) router using the web-UI
-// endpoints: login.cgi for authentication and cgi/*.js for data.
-type livebox6Client struct {
+// Client talks to a Livebox 6/7 (Arcadyan) router using the web-UI endpoints:
+// login.cgi for authentication and cgi/*.js for data.
+type Client struct {
 	base   string
 	client *http.Client
 	token  string
 }
 
-var livebox6AddCfgRe = regexp.MustCompile(`addCfg\("([^"]+)",\s*"[^"]*",\s*"([^"]*)"\)`)
+var addCfgRe = regexp.MustCompile(`addCfg\("([^"]+)",\s*"[^"]*",\s*"([^"]*)"\)`)
 
-// newLivebox6Client logs in and extracts the httoken needed for subsequent
-// cgi/*.js requests.
-func newLivebox6Client(ctx context.Context, address, username, password string) (*livebox6Client, error) {
+// NewClient logs in and extracts the httoken needed for subsequent cgi/*.js
+// requests.
+func NewClient(ctx context.Context, address, username, password string) (*Client, error) {
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		return nil, err
@@ -41,20 +41,20 @@ func newLivebox6Client(ctx context.Context, address, username, password string) 
 
 	// 1. Fetch the login page and extract the AES key and IV from its spacer
 	// image.
-	page, err := livebox6Get(ctx, client, base+"/login.htm")
+	page, err := httpGet(ctx, client, base+"/login.htm")
 	if err != nil {
 		return nil, fmt.Errorf("fetching the login page: %w", err)
 	}
-	key, iv, err := livebox6Keys(page)
+	key, iv, err := loginKeys(page)
 	if err != nil {
 		return nil, err
 	}
 
-	userField, err := livebox6Field(username, key, iv)
+	userField, err := loginField(username, key, iv)
 	if err != nil {
 		return nil, err
 	}
-	passField, err := livebox6Field(password, key, iv)
+	passField, err := loginField(password, key, iv)
 	if err != nil {
 		return nil, err
 	}
@@ -86,24 +86,24 @@ func newLivebox6Client(ctx context.Context, address, username, password string) 
 	}
 
 	// 3. Fetch a logged-in page to extract the httoken from its spacer image.
-	page, err = livebox6Get(ctx, client, base+"/network_connected.htm")
+	page, err = httpGet(ctx, client, base+"/network_connected.htm")
 	if err != nil {
 		return nil, fmt.Errorf("fetching the network page: %w", err)
 	}
-	token, err := livebox6TokenFromPage(page)
+	token, err := tokenFromPage(page)
 	if err != nil {
 		return nil, fmt.Errorf("extracting httoken: %w", err)
 	}
 
-	return &livebox6Client{
+	return &Client{
 		base:   base,
 		client: client,
 		token:  token,
 	}, nil
 }
 
-// livebox6Get fetches a page and returns its body.
-func livebox6Get(ctx context.Context, client *http.Client, url string) (string, error) {
+// httpGet fetches a page and returns its body.
+func httpGet(ctx context.Context, client *http.Client, url string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return "", err
@@ -120,53 +120,42 @@ func livebox6Get(ctx context.Context, client *http.Client, url string) (string, 
 	return string(body), nil
 }
 
-// livebox6TokenFromPage decodes ArcBase._t(1) from the spacer image on a
-// logged-in page. The spacer payload layout is: bytes 0-31 the encrypted key,
-// bytes 32-47 the IV, and bytes 48-end the httoken as ASCII.
-func livebox6TokenFromPage(page string) (string, error) {
-	data, err := livebox6SpacerPayload(page)
-	if err != nil {
-		return "", err
-	}
-	return string(data[48:]), nil
-}
-
-// cgiData holds the key/value pairs parsed from a cgi/*.js response, plus the
+// Data holds the key/value pairs parsed from a cgi/*.js response, plus the
 // raw body for files that embed data outside addCfg calls.
-type cgiData struct {
+type Data struct {
 	entries map[string]string
-	raw     string
+	Raw     string
 }
 
-// get returns the value for a key, or the empty string if absent.
-func (d cgiData) get(key string) string {
+// Get returns the value for a key, or the empty string if absent.
+func (d Data) Get(key string) string {
 	return d.entries[key]
 }
 
-// has reports whether a key is present, even if its value is empty.
-func (d cgiData) has(key string) bool {
+// Has reports whether a key is present, even if its value is empty.
+func (d Data) Has(key string) bool {
 	_, ok := d.entries[key]
 	return ok
 }
 
 // parseCGIBody parses the addCfg("name", "id", "value") calls of a cgi/*.js
 // response body.
-func parseCGIBody(body string) cgiData {
-	data := cgiData{entries: make(map[string]string), raw: body}
-	for _, m := range livebox6AddCfgRe.FindAllStringSubmatch(body, -1) {
+func parseCGIBody(body string) Data {
+	data := Data{entries: make(map[string]string), Raw: body}
+	for _, m := range addCfgRe.FindAllStringSubmatch(body, -1) {
 		data.entries[m[1]] = m[2]
 	}
 	return data
 }
 
-// getCGI fetches a cgi/*.js data file and parses its addCfg calls.
-func (c *livebox6Client) getCGI(ctx context.Context, page string) (cgiData, error) {
+// CGI fetches a cgi/*.js data file and parses its addCfg calls.
+func (c *Client) CGI(ctx context.Context, page string) (Data, error) {
 	now := time.Now().UnixMilli()
 	u := fmt.Sprintf("%s/cgi/cgi_%s.js?_tn=%s&_t=%d&_=%d", c.base, page, c.token, now, now)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
 	if err != nil {
-		return cgiData{}, err
+		return Data{}, err
 	}
 	req.Header.Set("Accept", "text/javascript, application/javascript, */*; q=0.01")
 	req.Header.Set("Referer", c.base+"/network_connected.htm")
@@ -174,16 +163,16 @@ func (c *livebox6Client) getCGI(ctx context.Context, page string) (cgiData, erro
 
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return cgiData{}, fmt.Errorf("fetching cgi_%s.js: %w", page, err)
+		return Data{}, fmt.Errorf("fetching cgi_%s.js: %w", page, err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return cgiData{}, fmt.Errorf("reading cgi_%s.js: %w", page, err)
+		return Data{}, fmt.Errorf("reading cgi_%s.js: %w", page, err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return cgiData{}, fmt.Errorf("cgi_%s.js returned HTTP %d: %s", page, resp.StatusCode, string(body))
+		return Data{}, fmt.Errorf("cgi_%s.js returned HTTP %d: %s", page, resp.StatusCode, string(body))
 	}
 
 	return parseCGIBody(string(body)), nil
@@ -192,15 +181,15 @@ func (c *livebox6Client) getCGI(ctx context.Context, page string) (cgiData, erro
 // Devices returns the DHCP leases. The leases live in infoLan.js as
 // var dhcp_leaseTime=[...]; on some firmware the same 5-tuples are exposed in
 // clients.js as var dhcp_client=[...].
-func (c *livebox6Client) Devices(ctx context.Context) ([]livebox6Device, error) {
+func (c *Client) Devices(ctx context.Context) ([]Device, error) {
 	var errs []error
 	for _, page := range []string{"infoLan", "clients"} {
-		data, err := c.getCGI(ctx, page)
+		data, err := c.CGI(ctx, page)
 		if err != nil {
 			errs = append(errs, err)
 			continue
 		}
-		devices, err := livebox6ParseDevices(data.raw)
+		devices, err := parseDevices(data.Raw)
 		if err == nil {
 			return devices, nil
 		}
@@ -210,55 +199,55 @@ func (c *livebox6Client) Devices(ctx context.Context) ([]livebox6Device, error) 
 }
 
 // PortForwards returns the NAT port forwarding rules from nat_osp.js.
-func (c *livebox6Client) PortForwards(ctx context.Context) ([]livebox6PortForward, error) {
-	data, err := c.getCGI(ctx, "nat_osp")
+func (c *Client) PortForwards(ctx context.Context) ([]PortForward, error) {
+	data, err := c.CGI(ctx, "nat_osp")
 	if err != nil {
 		return nil, err
 	}
-	return livebox6ParsePortForwards(data), nil
+	return parsePortForwards(data), nil
 }
 
 // DMZ returns the DMZ configuration from fw_dmz_osp.js.
-func (c *livebox6Client) DMZ(ctx context.Context) (livebox6DMZ, error) {
-	data, err := c.getCGI(ctx, "fw_dmz_osp")
+func (c *Client) DMZ(ctx context.Context) (DMZ, error) {
+	data, err := c.CGI(ctx, "fw_dmz_osp")
 	if err != nil {
-		return livebox6DMZ{}, err
+		return DMZ{}, err
 	}
-	return livebox6ParseDMZ(data), nil
+	return parseDMZ(data), nil
 }
 
 // DNSRecords returns the static DNS entries from dns.js.
-func (c *livebox6Client) DNSRecords(ctx context.Context) ([]livebox6DNSRecord, error) {
-	data, err := c.getCGI(ctx, "dns")
+func (c *Client) DNSRecords(ctx context.Context) ([]DNSRecord, error) {
+	data, err := c.CGI(ctx, "dns")
 	if err != nil {
 		return nil, err
 	}
-	return livebox6ParseDNS(data), nil
+	return parseDNS(data), nil
 }
 
 // StaticLeases returns the static DHCP leases from lan_dhcp_static.js.
-func (c *livebox6Client) StaticLeases(ctx context.Context) ([]livebox6StaticLease, error) {
-	data, err := c.getCGI(ctx, "lan_dhcp_static")
+func (c *Client) StaticLeases(ctx context.Context) ([]StaticLease, error) {
+	data, err := c.CGI(ctx, "lan_dhcp_static")
 	if err != nil {
 		return nil, err
 	}
-	return livebox6ParseStaticLeases(data), nil
+	return parseStaticLeases(data), nil
 }
 
 // WLAN returns the Wi-Fi configuration from wlan_combine.js.
-func (c *livebox6Client) WLAN(ctx context.Context) (livebox6WLAN, error) {
-	data, err := c.getCGI(ctx, "wlan_combine")
+func (c *Client) WLAN(ctx context.Context) (WLAN, error) {
+	data, err := c.CGI(ctx, "wlan_combine")
 	if err != nil {
-		return livebox6WLAN{}, err
+		return WLAN{}, err
 	}
-	return livebox6ParseWLAN(data), nil
+	return parseWLAN(data), nil
 }
 
 // Speed returns the WAN sync rates from infoInternet.js.
-func (c *livebox6Client) Speed(ctx context.Context) (livebox6Speed, error) {
-	data, err := c.getCGI(ctx, "infoInternet")
+func (c *Client) Speed(ctx context.Context) (Speed, error) {
+	data, err := c.CGI(ctx, "infoInternet")
 	if err != nil {
-		return livebox6Speed{}, err
+		return Speed{}, err
 	}
-	return livebox6ParseSpeed(data)
+	return parseSpeed(data)
 }

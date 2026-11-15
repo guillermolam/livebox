@@ -1,9 +1,7 @@
-package main
+package api
 
 import (
 	"context"
-	"encoding/base64"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,43 +9,7 @@ import (
 	"testing"
 )
 
-// The spacer data URI starts with the "data:image/gif;base64," prefix and a
-// 56-character GIF header (78 characters in total); the base64 payload after
-// that decodes to key(32) + IV(16) + httoken(ASCII).
-const testSpacerPrefix = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
-const testKey = "J7mz1T8JVsk31jj8nhwvaUM71uX4dbZD"
-const testIV = "DWnBv4OFkvqfL+4Z"
-const testToken = "1234567890"
-
-// spacerPage builds a page whose spacer image carries the given payload
-// (raw bytes after the 78-character prefix).
-func spacerPage(payload []byte) string {
-	enc := base64.StdEncoding.EncodeToString(payload)
-	return fmt.Sprintf(`<html><img title=spacer src="%s%s" border=0></html>`, testSpacerPrefix, enc)
-}
-
-// keyIV returns the 48-byte key+IV blob the login page carries.
-func keyIV() []byte {
-	return append([]byte(testKey), testIV...)
-}
-
-func TestClientSpacerPages(t *testing.T) {
-	// Sanity-check the test fixtures against the real parsers before using
-	// them in the HTTP tests.
-	if _, _, err := livebox6Keys(spacerPage(keyIV())); err != nil {
-		t.Fatalf("login fixture invalid: %v", err)
-	}
-	// The logged-in page carries key+IV+token; the token sits at bytes 48+.
-	tok, err := livebox6TokenFromPage(spacerPage(append(keyIV(), testToken...)))
-	if err != nil {
-		t.Fatalf("network fixture invalid: %v", err)
-	}
-	if tok != testToken {
-		t.Errorf("token = %q, want %q", tok, testToken)
-	}
-}
-
-func TestLivebox6ClientGetCGI(t *testing.T) {
+func TestClientGetCGI(t *testing.T) {
 	var requestURL string
 	var requestHeaders http.Header
 	var loggedIn bool
@@ -75,16 +37,16 @@ func TestLivebox6ClientGetCGI(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client, err := newLivebox6Client(context.Background(), strings.TrimPrefix(ts.URL, "http://"), "admin", "password")
+	client, err := NewClient(context.Background(), strings.TrimPrefix(ts.URL, "http://"), "admin", "password")
 	if err != nil {
-		t.Fatalf("newLivebox6Client: %v", err)
+		t.Fatalf("NewClient: %v", err)
 	}
 
-	data, err := client.getCGI(context.Background(), "test")
+	data, err := client.CGI(context.Background(), "test")
 	if err != nil {
-		t.Fatalf("getCGI: %v", err)
+		t.Fatalf("CGI: %v", err)
 	}
-	if got, want := data.get("foo"), "bar"; got != want {
+	if got, want := data.Get("foo"), "bar"; got != want {
 		t.Errorf("foo = %q, want %q", got, want)
 	}
 
@@ -105,7 +67,7 @@ func TestLivebox6ClientGetCGI(t *testing.T) {
 	}
 }
 
-func TestLivebox6ClientBadCredentials(t *testing.T) {
+func TestClientBadCredentials(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/login.htm":
@@ -119,7 +81,7 @@ func TestLivebox6ClientBadCredentials(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	_, err := newLivebox6Client(context.Background(), strings.TrimPrefix(ts.URL, "http://"), "admin", "wrong")
+	_, err := NewClient(context.Background(), strings.TrimPrefix(ts.URL, "http://"), "admin", "wrong")
 	if err == nil {
 		t.Fatal("expected authentication error")
 	}
@@ -128,7 +90,7 @@ func TestLivebox6ClientBadCredentials(t *testing.T) {
 	}
 }
 
-func TestLivebox6ClientUnauthenticatedCGI(t *testing.T) {
+func TestClientUnauthenticatedCGI(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/login.htm":
@@ -146,12 +108,12 @@ func TestLivebox6ClientUnauthenticatedCGI(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client, err := newLivebox6Client(context.Background(), strings.TrimPrefix(ts.URL, "http://"), "admin", "password")
+	client, err := NewClient(context.Background(), strings.TrimPrefix(ts.URL, "http://"), "admin", "password")
 	if err != nil {
-		t.Fatalf("newLivebox6Client: %v", err)
+		t.Fatalf("NewClient: %v", err)
 	}
 
-	_, err = client.getCGI(context.Background(), "test")
+	_, err = client.CGI(context.Background(), "test")
 	if err == nil {
 		t.Fatal("expected an error when the router redirects the data request to the login page")
 	}

@@ -1,27 +1,16 @@
-package main
+package api
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 )
 
-func loadTestData(t *testing.T, name string) string {
-	t.Helper()
-	b, err := os.ReadFile(filepath.Join("testdata", "livebox6", name))
-	if err != nil {
-		t.Fatalf("reading %s: %v", name, err)
-	}
-	return string(b)
-}
-
 func TestParseDevices(t *testing.T) {
-	// The infoLan.js capture is missing; clients.js carries the same lease
-	// table as var dhcp_client=[...].
+	// The lease table lives in clients.js as var dhcp_client=[...] (and in
+	// infoLan.js as var dhcp_leaseTime=[...]).
 	raw := loadTestData(t, "js_clients.js")
-	devices, err := livebox6ParseDevices(raw)
+	devices, err := parseDevices(raw)
 	if err != nil {
-		t.Fatalf("livebox6ParseDevices: %v", err)
+		t.Fatalf("parseDevices: %v", err)
 	}
 	if len(devices) == 0 {
 		t.Fatal("expected at least one device")
@@ -52,9 +41,25 @@ func TestParseDevices(t *testing.T) {
 	}
 }
 
+func TestParseDevicesInfoLan(t *testing.T) {
+	raw := loadTestData(t, "js_infoLan.js")
+	devices, err := parseDevices(raw)
+	if err != nil {
+		t.Fatalf("parseDevices: %v", err)
+	}
+	if len(devices) == 0 {
+		t.Fatal("expected at least one device")
+	}
+	for _, d := range devices {
+		if d.IP == "" {
+			t.Errorf("device %+v has no IP", d)
+		}
+	}
+}
+
 func TestParsePortForwards(t *testing.T) {
 	data := parseCGIBody(loadTestData(t, "js_nat_osp.js"))
-	rules := livebox6ParsePortForwards(data)
+	rules := parsePortForwards(data)
 
 	// The captured file has a large table; we only assert structural sanity.
 	for _, r := range rules {
@@ -69,7 +74,7 @@ func TestParsePortForwards(t *testing.T) {
 
 func TestParseDMZ(t *testing.T) {
 	data := parseCGIBody(loadTestData(t, "js_fw_dmz_osp.js"))
-	dmz := livebox6ParseDMZ(data)
+	dmz := parseDMZ(data)
 
 	// The capture shows DMZ disabled with host_ip 0.0.0.0.
 	if dmz.HostIP == "" {
@@ -79,7 +84,7 @@ func TestParseDMZ(t *testing.T) {
 
 func TestParseDNS(t *testing.T) {
 	data := parseCGIBody(loadTestData(t, "js_dns.js"))
-	records := livebox6ParseDNS(data)
+	records := parseDNS(data)
 
 	// All captured dns_hostname/dns_ip pairs are empty in this file.
 	// The parser must still return without panic.
@@ -90,7 +95,7 @@ func TestParseDNS(t *testing.T) {
 
 func TestParseStaticLeases(t *testing.T) {
 	data := parseCGIBody(loadTestData(t, "js_lan_dhcp_static.js"))
-	leases := livebox6ParseStaticLeases(data)
+	leases := parseStaticLeases(data)
 
 	// The captured static lease table is empty, but parsing must succeed.
 	if leases == nil {
@@ -100,7 +105,7 @@ func TestParseStaticLeases(t *testing.T) {
 
 func TestParseWLAN(t *testing.T) {
 	data := parseCGIBody(loadTestData(t, "js_wlan_combine.js"))
-	wlan := livebox6ParseWLAN(data)
+	wlan := parseWLAN(data)
 
 	if !wlan.Band24Enabled && !wlan.Band5Enabled {
 		t.Error("expected at least one Wi-Fi band to be enabled")
@@ -119,7 +124,7 @@ func TestParseSpeed(t *testing.T) {
 		// no sync rates, and the parser must fail loudly instead of returning
 		// 0/0.
 		data := parseCGIBody(loadTestData(t, "js_infoInternet.js"))
-		if _, err := livebox6ParseSpeed(data); err == nil {
+		if _, err := parseSpeed(data); err == nil {
 			t.Error("expected an error for missing sync rates, got none")
 		}
 	})
@@ -129,9 +134,9 @@ func TestParseSpeed(t *testing.T) {
 addCfg("DownstreamCurrRate", "1", "1000000");
 addCfg("UpstreamCurrRate", "1", "600000");
 `)
-		speed, err := livebox6ParseSpeed(data)
+		speed, err := parseSpeed(data)
 		if err != nil {
-			t.Fatalf("livebox6ParseSpeed: %v", err)
+			t.Fatalf("parseSpeed: %v", err)
 		}
 		if speed.DownstreamKbps != 1000000 || speed.UpstreamKbps != 600000 {
 			t.Errorf("speed = %+v", speed)

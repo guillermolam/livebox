@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<!--[if lt IE 7]><html class="no-js lt-ie9 lt-ie8 lt-ie7"lang="en"><![endif]-->
+<!--[if IE 7]><html class="no-js lt-ie9 lt-ie8"lang="en"><![endif]-->
+<!--[if IE 8]><html class="no-js lt-ie9"lang="en"><![endif]-->
+<!--[if gt IE 8]><!--><html lang="en"class="gt-ie8"><!--<![endif]-->
+<!--[if lt IE 10]><meta http-equiv="X-UA-Compatible"content="IE=edge"/><![endif]-->
+<head>
+<title></title>
+<link rel="Shortcut Icon"type="image/png"href="images/favicon.ico"/>
+<meta http-equiv="Content-Type"content="text/html; charset=utf-8">
+<link rel="stylesheet"type="text/css"media="screen"href="css/osp_reset.css">
+<link rel="stylesheet"type="text/css"media="screen"href="css/osp_styles.css">
+<link rel="stylesheet"type="text/css"media="all"href="css/arctransform.css">
+<!--[if lt IE 9]>
+<link rel="stylesheet"type="text/css"media="screen"href="css/ie.css"/>
+<![endif]-->
+<script type="text/javascript">var LangJ=[];var CGIs=["network_connected","clients","firewall_mac_filter"];</script>
+<script type="text/javascript"src="js/jquery-3.6.0.min.js"></script>
+<script type="text/javascript"src="js/global.js"></script>
+<script type="text/javascript"src="js/osp_menu.js"></script>
+<script type="text/javascript"src="js/jquery.arctransform.js"></script>
+<script type="text/javascript">
+function getDeviceType(dev){
+var dev_mac=dev.mac;
+var dev_type;
+var found=0;
+for(var i=0;i<ARC_DEF_LAN_CLIENT_MAXNUM;i++){
+if(getCfg("client_mac"+i)==dev_mac){
+dev_type=getCfg("client_deviceType"+i);
+found=1;}}
+if(found==0){
+if(dev.option60=="OrangeTV-STB"||dev.option60=="Air7200-IPTV")
+dev_type="decoder";
+else
+dev_type="desktop";}
+var alt={
+desktop:'PC',
+smartphone:'smartphone',
+tablet:'tablet',
+laptop:'laptop',
+handset:'handset',
+tv:'tv',
+decoder:'tv decoder',
+games:'game console',
+hdmi:'media streaming',
+speaker:'smart speaker',
+printer:'printer/scanner',
+webcam:'camera',
+hub:'hub/switch',
+modem:'repeater/ap',
+heatingswitch:'thermostat',
+alarm:'alarm',
+temperature:'iot sensor',
+lightbulb:'iot actuator',
+homeappliance:'home appliance',
+object:'generic device'};
+return{type:dev_type,alt:alt[dev_type]};}
+function calculate_diff_time(new_time,old_time)
+{
+if(new_time>=old_time)
+{
+return(new_time-old_time);}
+else
+{
+return(0xffffffff-old_time+1+new_time);}}
+function buildDeviceList(){
+var list=[],len=0;
+var find_mac=0;
+var re_tplg_mac="";
+var diff_time;
+if(typeof client_list!='undefined'){
+list=client_list;
+len=list.length;}
+for(var i=0;i<len;i++){
+find_mac=0;
+if(list[i].isOnline==0)
+{
+continue;}
+diff_time=calculate_diff_time(parseInt(system_uptime),parseInt(list[i].uptime));
+if(diff_time<=15)
+{
+continue;}
+if(list[i].isWL==0){
+for(var k in topology_info.nodes){
+if((list[i].mac).toUpperCase()==(topology_info.nodes[k].eth_mac).toUpperCase()||(list[i].mac).toUpperCase()==(topology_info.nodes[k].device_mac).toUpperCase())
+find_mac=1;}
+for(var l in re_topology_info.nodes){
+re_tplg_mac=re_topology_info.nodes[l].device_mac.substring(0,16)+String.fromCharCode(re_topology_info.nodes[l].device_mac[16].charCodeAt()+1);
+if((list[i].mac).toUpperCase()==re_tplg_mac.toUpperCase())
+find_mac=1;}
+if(find_mac==0)
+createDeviceLi($('#home-dashboard-wired-devices').find('.list-devices-horizontal'),list[i]);}else{
+for(var k in topology_info.nodes){
+if((list[i].mac).toUpperCase()==(topology_info.nodes[k].device_mac).toUpperCase()||(list[i].mac).toUpperCase()==(topology_info.nodes[k].eth_mac).toUpperCase())
+find_mac=1;}
+for(var l in re_topology_info.nodes){
+re_tplg_mac=re_topology_info.nodes[l].device_mac.substring(0,16)+String.fromCharCode(re_topology_info.nodes[l].device_mac[16].charCodeAt()+1);
+if((list[i].mac).toUpperCase()==re_tplg_mac.toUpperCase())
+find_mac=1;}
+if(find_mac==0)
+createDeviceLi($('#home-dashboard-wireless-devices').find('.list-devices-horizontal'),list[i]);}}
+init_object_usb_disk_info();
+if(gaoUsbDisk instanceof Array){
+if(gaoUsbDisk.length>0){
+for(var ki=0;ki<gaoUsbDisk.length;ki++){
+createDeviceUsbLi($('#home-dashboard-usb-devices').find('.list-devices-vertical'),gaoUsbDisk[ki]);}}}
+var find_same_mac=0;
+for(var l in re_topology_info.nodes){
+find_same_mac=0;
+for(var k in topology_info.nodes){
+if((re_topology_info.nodes[l].device_mac).toUpperCase()==(topology_info.nodes[k].device_mac).toUpperCase()){
+find_same_mac=1;}}
+if(find_same_mac==0)
+createRepeaterLi($('#home-dashboard-repeater-devices').find('.list-devices-horizontal'),re_topology_info.nodes[l].device_name,re_topology_info.nodes[l].ip,re_topology_info.nodes[l].device_mac,"","","","","","","","","");}
+for(var k in topology_info.nodes){
+if(k==0)
+continue;
+if(topology_info.nodes[k].device_ip.split(".")[3]=="255"||(topology_info.nodes[k].device_ip.split(".")[2]=="250"&&topology_info.nodes[k].device_ip.split(".")[3]=="250"))
+continue;
+createRepeaterLi($('#home-dashboard-repeater-devices').find('.list-devices-horizontal'),topology_info.nodes[k].device_name,topology_info.nodes[k].device_ip,topology_info.nodes[k].eth_mac,topology_info.nodes[k].sn,topology_info.nodes[k].hw_ver,topology_info.nodes[k].fw_ver,topology_info.nodes[k].essid_5g,topology_info.nodes[k].connect_rssi,topology_info.nodes[k].uptime,topology_info.nodes[k].bssid_2g,topology_info.nodes[k].bssid_5g,topology_info.nodes[k].device_id);}
+for(var n in re_station_info.stations){
+find_same_mac=0;
+if(re_station_info.stations[n].station_name.indexOf("Repetidor")==0||re_station_info.stations[n].station_name.indexOf("repetidor")==0){
+if(re_station_info.stations[n].link_rate=="0Mbps")
+continue;
+for(var k in topology_info.nodes){
+if((re_station_info.stations[n].station_mac).toUpperCase()==(topology_info.nodes[k].device_mac).toUpperCase()){
+find_same_mac=1;}}
+if(find_same_mac==1)
+continue;
+for(var m in station_info.stations){
+if((re_station_info.stations[n].station_mac).toUpperCase()==(station_info.stations[m].station_mac).toUpperCase()&&station_info.stations[m].online=="1"){
+createRepeaterLi($('#home-dashboard-repeater-devices').find('.list-devices-horizontal'),re_station_info.stations[n].station_name,station_info.stations[m].station_ip,re_station_info.stations[n].station_mac,"","","","","","","","","");}}}}}
+var devicewiredLiTemplate='<div class="internet-%INTERNET%"></div>'+'<div class="icon" style="position:relative; text-align:center;">'+'<img class="img-zoom" src="images/icons-devices-%DEV_TYPE%.png" width="55" height="55"  alt="%DEV_TYPE_ALT%" ></div>'+'<div class="title">%DEV_NAME%</div>'+'<div class="subtitle" style="margin-top: 15px; color:#A1A1A1;">%PHY_INTF%</div>'+'<br><div style="text-align:center;"><img src="images/dashboard-bg-wired-line.png"></div>';
+var deviceLiTemplate='<div class="internet-%INTERNET%"></div>'+'<div class="icon" style="position:relative; text-align:center;">'+'<img class="img-zoom" src="images/icons-devices-%DEV_TYPE%.png" width="55" height="55"  alt="%DEV_TYPE_ALT%" ></div>'+'<div class="title">%DEV_NAME%</div>';
+function createDeviceLi(ul,dev){
+var li=document.createElement('li');
+var devName=unescape(dev.name);
+var phyIntf=unescape(dev.physical_interface).replace("eth0.0","GE1").replace("eth1.0","GE2").replace("eth2.0","GE3").replace("eth3.0","GE4");
+var v6addr;
+if(phyIntf.indexOf("wds")!=-1)
+phyIntf="GER";
+$(li).click((function(dev){
+return function(event){
+event.stopPropagation();
+if(dev.ipv6_gua!="-")
+v6addr=dev.ipv6_gua.split(",");
+if(dev.ipv6_gua=="-"){
+if(dev.mac_from_dhcp_lease_file!="00:00:00:00:00:00")
+{
+if(arc.i18n.getLanguage()=='en'){
+$('#device-menu-header').html(safthtml(unescape(dev.name))+'<br><span data-i18n="general.repeater.information.ip">IP address : </span>'+safthtml(dev.ip)+'<br><span data-i18n="general.repeater.information.mac">MAC address : </span>'+safthtml(dev.mac_from_dhcp_lease_file)+'<br><span data-i18n="general.client.information.last_conn">last connection : <br></span>'+safthtml(dev.last_conn_time));}else{
+$('#device-menu-header').html(safthtml(unescape(dev.name))+'<br><span data-i18n="general.repeater.information.ip">Dirección IP : </span>'+safthtml(dev.ip)+'<br><span data-i18n="general.repeater.information.mac">Dirección MAC : </span>'+safthtml(dev.mac_from_dhcp_lease_file)+'<br><span data-i18n="general.client.information.last_conn">Última conexión : <br></span>'+safthtml(dev.last_conn_time));}}
+else{
+if(arc.i18n.getLanguage()=='en'){
+$('#device-menu-header').html(safthtml(unescape(dev.name))+'<br><span data-i18n="general.repeater.information.ip">IP address : </span>'+safthtml(dev.ip)+'<br><span data-i18n="general.repeater.information.mac">MAC address : </span>'+safthtml(dev.mac)+'<br><span data-i18n="general.client.information.last_conn">last connection : </span><br>'+safthtml(dev.last_conn_time));}else{
+$('#device-menu-header').html(safthtml(unescape(dev.name))+'<br><span data-i18n="general.repeater.information.ip">Dirección IP : </span>'+safthtml(dev.ip)+'<br><span data-i18n="general.repeater.information.mac">Dirección MAC : </span>'+safthtml(dev.mac)+'<br><span data-i18n="general.client.information.last_conn">Última conexión : </span><br>'+safthtml(dev.last_conn_time));}}}else{
+if(arc.i18n.getLanguage()=='en'){
+$('#device-menu-header').html(safthtml(unescape(dev.name))+'<br><span data-i18n="general.repeater.information.ip">IP address : </span>'+safthtml(dev.ip)+'<br><span data-i18n="general.client.information.ipv6">IPv6 address : </span><br>'+safthtml(v6addr[v6addr.length-1])+'<br><span data-i18n="general.repeater.information.mac">MAC address : </span>'+safthtml(dev.mac)+'<br><span data-i18n="general.client.information.last_conn">last connection : </span><br>'+safthtml(dev.last_conn_time));}else{
+$('#device-menu-header').html(safthtml(unescape(dev.name))+'<br><span data-i18n="general.repeater.information.ip">Dirección IP : </span>'+safthtml(dev.ip)+'<br><span data-i18n="general.client.information.ipv6">Dirección IPv6 : </span><br>'+safthtml(v6addr[v6addr.length-1])+'<br><span data-i18n="general.repeater.information.mac">Dirección MAC : </span>'+safthtml(dev.mac)+'<br><span data-i18n="general.client.information.last_conn">Última conexión : </span><br>'+safthtml(dev.last_conn_time));}}
+buildMenuItem(dev);
+var menu=$('#device-menu');
+var p=$(this).offset();
+p.left+=80;
+menu.show();
+menu.offset(p);
+for(var i=0;i<$('#device-menu ul li').length;i++){
+if(i>6){
+$('#device-menu ul li:eq('+i+')').hide();}}};})(dev));
+if(devName.length>5){
+$(li).mouseenter((function(name){
+return function(){
+var tooltip=$('#device-tooltip');
+tooltip.text(name);
+tooltip.show();
+var p=$(this).offset();
+p.top+=70;
+p.left-=(tooltip.width()/2-25);
+tooltip.offset(p);};})(devName)).mouseleave(function(){$('#device-tooltip').hide();});
+devName=devName.slice(0,5)+'...';}
+var t=getDeviceType(dev);
+var curr_time=unescape("Sun, 15 Nov 2026 11:27:27 +0100").split('+');
+var isInternetBlocked=0,disable_allday=0;
+var i=0,len=ARC_DEF_FIREWALL_MACFILTER_MAXNUM;
+var macFilter_sch_buf="";
+var successiveStartIdx=999;
+var successiveFlag=0;
+var nowTime=new Date(curr_time[0]);
+var curr_day=-1;
+switch(nowTime.getDay()){
+case 0:curr_day=6;break;
+case 1:curr_day=0;break;
+case 2:curr_day=1;break;
+case 3:curr_day=2;break;
+case 4:curr_day=3;break;
+case 5:curr_day=4;break;
+case 6:curr_day=5;break;}
+var curr_hour=nowTime.getHours()+(nowTime.getMinutes()==0?0:1);
+for(i=0;i<len;i++){
+if(getCfg("macFilter_mac_"+i)==dev.mac&&getCfg("macFilter_enable_"+i)=="1"){
+for(var j=0;j<ARC_DEF_FIREWALL_MF_WEEKDAY_MAXNUM;j++){
+macFilter_sch_buf=hex2bin(getCfg("macFilter_sch_"+i+"_"+j));
+for(var k=0;k<macFilter_sch_buf.length;k++){
+if(macFilter_sch_buf[k]=='1'){
+if(successiveFlag==0){
+continue;}else{
+successiveFlag=0;
+if(curr_day==j&&(curr_hour>successiveStartIdx&&curr_hour<=(k%24)))
+isInternetBlocked=1;}
+successiveStartIdx=999;}else{
+successiveFlag=1;
+if(successiveStartIdx==999)
+successiveStartIdx=k%24;}}
+if(k==macFilter_sch_buf.length&&successiveFlag==1){
+if(curr_day==j&&(curr_hour>successiveStartIdx&&curr_hour<=24))
+isInternetBlocked=1;}
+successiveStartIdx=999;
+successiveFlag=0;
+if(getCfg("macFilter_sch_"+i+"_"+j)=="000000")
+disable_allday++;}
+if(disable_allday==ARC_DEF_FIREWALL_MF_WEEKDAY_MAXNUM)
+isInternetBlocked=1;
+break;}}
+li.innerHTML=
+devicewiredLiTemplate.slice(0).replace('%INTERNET%',isInternetBlocked?'blocked':'avail').replace('%DEV_TYPE%',t.type).replace('%DEV_TYPE_ALT%',t.alt).replace('%DEV_NAME%',safthtml(devName)).replace('%PHY_INTF%',safthtml(phyIntf));
+ul.append(li);}
+function buildMenuItem(dev){
+var a=$('#menu-item-access');
+var c=$('#menu-item-customize');
+var d=$('#menu-item-delete');
+var f=$('#menu-item-files');
+var e=$('#menu-item-eject');
+var g=$('#menu-item-repeater');
+a.hide();c.hide();d.hide();f.hide();e.hide();g.hide();
+var type=getDeviceType(dev).type;
+var mac=(dev.mac_from_dhcp_lease_file!="00:00:00:00:00:00")?dev.mac_from_dhcp_lease_file:dev.mac;
+var name=dev.name;
+if(type!='undefined'&&type!='decoder'){
+a.show();
+a.click(function(){
+window.location.href=('network_access_schedule.htm?'+'mac='+mac);});}
+if(type!='undefined'){
+c.show();
+c.click(function(){
+window.location.href=('network_customize.htm?'+'mac='+mac);});}}
+function createDeviceUsbLi(ul,dev){
+var li=document.createElement('li');
+var devName=unescape(dev["disk_name"]);
+$(li).click((function(){
+return function(event){
+event.stopPropagation();
+$('#device-menu-header').html(safthtml(dev["disk_name"]));
+buildUsbMenuItem(dev);
+var menu=$('#device-menu');
+var p=$(this).offset();
+p.left+=80;
+menu.show();
+menu.offset(p);
+for(var i=0;i<$('#device-menu ul li').length;i++){
+if(i>6){
+$('#device-menu ul li:eq('+i+')').hide();}}};})(dev));
+if(devName.length>5){
+$(li).mouseenter((function(name){
+return function(){
+var tooltip=$('#device-tooltip');
+tooltip.text(name);
+tooltip.show();
+var p=$(this).offset();
+p.top+=70;
+p.left-=(tooltip.width()/2-25);
+tooltip.offset(p);};})(devName)).mouseleave(function(){$('#device-tooltip').hide();});
+devName=devName.slice(0,5)+'...';}
+var t={type:'',alt:''};
+if(dev["type"]==undefined||dev["type"]=="unknown")
+t.type='storage';
+else
+t.type=dev["type"];
+if(dev["type"]=='storage'&&parseFloat(dev["info"][0]["capacity"])>930)
+t.type='storage-hard-disk';
+li.innerHTML=
+deviceLiTemplate.slice(0).replace('%DEV_TYPE%',t.type).replace('%DEV_TYPE_ALT%',t.alt).replace('%DEV_NAME%',safthtml(devName));
+ul.append(li);}
+function buildUsbMenuItem(dev){
+var a=$('#menu-item-access');
+var c=$('#menu-item-customize');
+var d=$('#menu-item-delete');
+var f=$('#menu-item-files');
+var e=$('#menu-item-eject');
+var g=$('#menu-item-repeater');
+a.hide();c.hide();d.hide();f.hide();e.hide();g.hide();
+if(dev["type"]=="storage")
+f.show();
+e.show();
+f.click(function(){top.topFrame.changeLoc(2,'files.htm')});
+e.click(function(){
+var szTmp="";
+if(gaoUsbDisk instanceof Array){
+if(gaoUsbDisk.length>0){
+for(var ki=0;ki<gaoUsbDisk.length;ki++){
+if(dev["disk_name"]==gaoUsbDisk[ki]["disk_name"])
+szTmp=gaoUsbDisk[ki]["mounted_name"];}}}
+return subForm({
+frm:document.tF,
+cmd:subFormUSBServiceAndUSBStorageUnmount,
+cmdparam:szTmp,
+wait:10});});}
+function createRepeaterLi(ul,name,ip,mac,sn,hw_ver,fw_ver,ssid,rssi,uptime,bssid_2g,bssid_5g,dev_id){
+var li=document.createElement('li');
+var devName=safthtml(unescape(name));
+var titlename=devName;
+var RepeaterLiTemplate='<div style="text-align:center; %display_wired_img%"><img src="images/dashboard-bg-wired-line.png" style="height: 8px;width: 50px;"></div>'+'<div class="subtitle" style="color:#A1A1A1; top:10px;">%PHY_INTF%</div>'+'<div class="icon" style="position:relative; text-align:center; margin-top: %icon_position%">'+'<img class="img-zoom" src="images/icons-devices-%DEV_TYPE%.png" width="auto" height="60"  alt="%DEV_TYPE_ALT%" ></div>'+'<div class="repsubtitle">%DEV_NAME%</div>';
+$(li).click((function(ip,mac){
+return function(event){
+event.stopPropagation();
+var uptime_format_str="";
+if(uptime!=""){
+var day=Math.floor(parseInt(uptime)/(3600*24));
+if(parseInt(day)<10)
+day="0"+day;
+var hour=Math.floor((parseInt(uptime)-(day*3600*24))/3600);
+if(parseInt(hour)<10)
+hour="0"+hour;
+var min=Math.floor((parseInt(uptime)-(day*3600*24)-(hour*3600))/60);
+if(parseInt(min)<10)
+min="0"+min;
+var sec=parseInt(uptime)%60;
+if(parseInt(sec)<10)
+sec="0"+sec;
+if(arc.i18n.getLanguage()=='en'){
+uptime_format_str=day+'<span data-i18n="general.repeater.information.day"> day </span>'+hour+'<span data-i18n="general.repeater.information.hour"> hour </span>'+min+'<span data-i18n="general.repeater.information.min"> min </span>';}else{
+uptime_format_str=day+'<span data-i18n="general.repeater.information.day"> día </span>'+hour+'<span data-i18n="general.repeater.information.hour"> hora </span>'+min+'<span data-i18n="general.repeater.information.min"> minuto </span>';}}
+if(arc.i18n.getLanguage()=='en'){
+$('#device-menu-header').html(titlename+'<br><span data-i18n="general.repeater.information.ip">IP address : </span>'+safthtml(ip)+((sn=="")?'<br><span data-i18n="general.repeater.information.mac">MAC address : </span>'+safthtml(mac):'<br><span data-i18n="general.repeater.information.mac_5g">MAC address(5GHz) : </span>'+safthtml(bssid_5g)+'<br><span data-i18n="general.repeater.information.mac_24g">MAC address(2.4GHz) : </span>'+safthtml(bssid_2g))+((sn=="")?'':'<br><span data-i18n="general.repeater.information.sn">Serial Number : </span>'+safthtml(sn))+((hw_ver=="")?'':'<br><span data-i18n="general.repeater.information.hw_ver">Hardware Version : </span>'+safthtml(hw_ver))+((fw_ver=="")?'':'<br><span data-i18n="general.repeater.information.fw_ver">Firmware Version : </span>'+safthtml(fw_ver))+((ssid=="")?'':'<br>SSID : '+safthtml(ssid))+((rssi=="")?'<br>RSSI : ':(rssi=="0")?'<br>RSSI : ':'<br>RSSI : '+safthtml(rssi)+' dBm')+((uptime_format_str=="")?'':'<br><span data-i18n="general.repeater.information.uptime">Uptime : </span>'+uptime_format_str)+((sn=="")?'':'<br><span data-i18n="general.repeater.information.client_num">Connected Wireless/Ethernet Clients : </span>'+safthtml(repeater_client_cnt)));}
+else{
+$('#device-menu-header').html(titlename+'<br><span data-i18n="general.repeater.information.ip">Dirección IP : </span>'+safthtml(ip)+((sn=="")?'<br><span data-i18n="general.repeater.information.mac">Dirección MAC : </span>'+safthtml(mac):'<br><span data-i18n="general.repeater.information.mac_5g">Dirección MAC(5GHz) : </span>'+safthtml(bssid_5g)+'<br><span data-i18n="general.repeater.information.mac_24g">Dirección MAC(2.4GHz) : </span>'+safthtml(bssid_2g))+((sn=="")?'':'<br><span data-i18n="general.repeater.information.sn">Número de Serie : </span>'+safthtml(sn))+((hw_ver=="")?'':'<br><span data-i18n="general.repeater.information.hw_ver">Versión de Hardware : </span>'+safthtml(hw_ver))+((fw_ver=="")?'':'<br><span data-i18n="general.repeater.information.fw_ver">Versión Middleware : </span>'+safthtml(fw_ver))+((ssid=="")?'':'<br>SSID : '+safthtml(ssid))+((rssi=="")?'<br>RSSI : ':(rssi=="0")?'<br>RSSI : ':'<br>RSSI : '+safthtml(rssi)+' dBm')+((uptime_format_str=="")?'':'<br><span data-i18n="general.repeater.information.uptime">tiempo de actividad : </span>'+uptime_format_str)+((sn=="")?'':'<br><span data-i18n="general.repeater.information.client_num">Clientes inalámbricos/Ethernet conectados : </span>'+safthtml(repeater_client_cnt)));}
+buildRepeaterMenuItem(ip);
+var menu=$('#device-menu');
+var p=$(this).offset();
+p.left+=80;
+menu.show();
+menu.offset(p);
+for(var i=0;i<$('#device-menu ul li').length;i++){
+if(i>6){
+if($('#device-menu ul li:eq('+i+')').html().search(dev_id)>0){
+$('#device-menu ul li:eq('+i+')').show();}else{
+$('#device-menu ul li:eq('+i+')').hide();}}}};})(ip,mac));
+if(devName.length>5){
+$(li).mouseenter((function(name){
+return function(){
+var tooltip=$('#device-tooltip');
+tooltip.text(name);
+tooltip.show();
+var p=$(this).offset();
+p.top+=70;
+p.left-=(tooltip.width()/2-25);
+tooltip.offset(p);};})(devName)).mouseleave(function(){$('#device-tooltip').hide();});
+devName=devName.slice(0,5)+'...';}
+var phyIntf="";
+var list=[],len=0;
+if(typeof client_list!='undefined'){
+list=client_list;
+len=list.length;}
+for(var i=0;i<len;i++){
+if(list[i].isOnline==0)
+{
+continue;}
+if(list[i].isWL==0)
+{
+if(list[i].ip==ip)
+{
+phyIntf=list[i].physical_interface;}}}
+if(phyIntf!=""){
+phyIntf=phyIntf.replace("eth0.0","GE1").replace("eth1.0","GE2").replace("eth2.0","GE3").replace("eth3.0","GE4");
+if(phyIntf.indexOf("wds")!=-1)
+phyIntf="GER";
+RepeaterLiTemplate=RepeaterLiTemplate.slice(0).replace('%display_wired_img%',"display:;");
+RepeaterLiTemplate=RepeaterLiTemplate.slice(0).replace('%icon_position%',"5px;");}else{
+$('#div_wired_img').hide();
+RepeaterLiTemplate=RepeaterLiTemplate.slice(0).replace('%display_wired_img%',"display:none;");
+RepeaterLiTemplate=RepeaterLiTemplate.slice(0).replace('%icon_position%',"25px;");}
+li.innerHTML=
+RepeaterLiTemplate.slice(0).replace('%DEV_TYPE%',(name.indexOf("repetidor")!=-1)?"repeater6":"repeater5").replace('%DEV_TYPE_ALT%',(name.indexOf("repetidor")!=-1)?"repeater6":"repeater5").replace('%DEV_NAME%',safthtml(devName)).replace('%PHY_INTF%',safthtml(phyIntf));
+ul.append(li);
+var repeater_client_cnt=0;
+for(var i in station_info.stations){
+if(station_info.stations[i].station_name=="NULL")
+continue;
+if(station_info.stations[i].station_name.indexOf("Repetidor")!=-1||station_info.stations[i].station_name.indexOf("repetidor")!=-1){
+continue;}
+if(station_info.stations[i].parent_id!=dev_id){
+continue;}
+if(station_info.stations[i].online!="1"){
+continue;}
+$("#device-menu ul").append('<li class="device-menu-item" id="'+station_info.stations[i].station_name+"_"+station_info.stations[i].station_mac+'">'+(station_info.stations[i].connect_type=="Ether"?"<img  src=\"images/ethernet-symbol.png\" width=\"23\" height=\"23\" align=\"left\">&nbsp;":"<img  src=\"images/wifi-symbol.png\" width=\"23\" height=\"23\" align=\"left\">&nbsp;")+'<span>'+station_info.stations[i].station_name+'</span><span style="display:none">'+station_info.stations[i].parent_id+'</span><img  src="images/triangle.png" width="23" height="23" align="right"></li>');
+document.getElementById(station_info.stations[i].station_name+"_"+station_info.stations[i].station_mac).onclick=function(name,ip,mac,ssid,link_rate,conn_type){
+return function(){
+if(arc.i18n.getLanguage()=='en'){
+$('#client-menu-header').html('<span data-i18n="general.repeater.information.dev_name">Device Name : </span>'+name+'<br><span data-i18n="general.repeater.information.ip">IP Address : </span>'+ip+'<br><span data-i18n="general.repeater.information.mac">MAC Address : </span>'+mac+'<br><span data-i18n="general.repeater.information.access_point">Access Point : </span>'+ssid+'<br><span data-i18n="general.repeater.information.data_rate">Data Rate : </span>'+link_rate+'<br><span data-i18n="general.repeater.information.frequency">Frequency : </span>'+conn_type);}else{
+$('#client-menu-header').html('<span data-i18n="general.repeater.information.dev_name">Nombre de Dispositivo : </span>'+name+'<br><span data-i18n="general.repeater.information.ip">Dirección IP : </span>'+ip+'<br><span data-i18n="general.repeater.information.mac">Dirección MAC : </span>'+mac+'<br><span data-i18n="general.repeater.information.access_point">Punto de Acceso : </span>'+ssid+'<br><span data-i18n="general.repeater.information.data_rate">Velocidad de transmisión : </span>'+link_rate+'<br><span data-i18n="general.repeater.information.frequency">Frecuencia : </span>'+conn_type);}
+var menu=$('#client-menu');
+var p=$(this).offset();
+p.left+=80;
+menu.show();
+menu.offset(p);}}(station_info.stations[i].station_name,station_info.stations[i].station_ip,station_info.stations[i].station_mac,ssid,station_info.stations[i].link_rate,station_info.stations[i].connect_type);
+repeater_client_cnt++;}}
+function buildRepeaterMenuItem(ip){
+var a=$('#menu-item-access');
+var c=$('#menu-item-customize');
+var d=$('#menu-item-delete');
+var f=$('#menu-item-files');
+var e=$('#menu-item-eject');
+var g=$('#menu-item-repeater');
+a.hide();c.hide();d.hide();f.hide();e.hide();g.hide();
+g.show();
+g.unbind('click').click(function(){
+window.open("http://"+ip);});}
+function buildDeviceShiftButton(){
+var deviceAmount=$('#home-dashboard-wired-devices').find('li').length;
+if(deviceAmount>4){
+$('#home-dashboard-wired-devices-scroll-right').click((function(deviceAmount){
+return function(){
+var list=$('#home-dashboard-wired-devices').find('.list-devices-horizontal');
+if(list.data('index')==undefined)
+list.data('index',0);
+if(list.data('index')<deviceAmount-4){
+if(deviceAmount-list.data('index')-4>4){
+list.css('left',list.position().left-320);
+list.data('index',list.data('index')+4);}else{
+list.css('left',list.position().left-((deviceAmount-list.data('index')-4)*80));
+list.data('index',deviceAmount-4);}}}})(deviceAmount));
+$('#home-dashboard-wired-devices-scroll-left').click(function(){
+var list=$('#home-dashboard-wired-devices').find('.list-devices-horizontal');
+if(list.data('index')>0){
+if(list.data('index')>4){
+list.css('left',list.position().left+320);
+list.data('index',list.data('index')-4);}else{
+list.css('left',list.position().left+(list.data('index')*80));
+list.data('index',0);}}});}else{
+$('#home-dashboard-wired-devices-scroll-right').hide();
+$('#home-dashboard-wired-devices-scroll-left').hide();}
+deviceAmount=$('#home-dashboard-wireless-devices').find('li').length;
+if(deviceAmount>3){
+$('#home-dashboard-wireless-devices-scroll-right').click((function(deviceAmount){
+return function(){
+var list=$('#home-dashboard-wireless-devices').find('.list-devices-horizontal');
+if(list.data('index')==undefined)
+list.data('index',0);
+if(list.data('index')<deviceAmount-3){
+if(deviceAmount-list.data('index')-3>3){
+list.css('left',list.position().left-240);
+list.data('index',list.data('index')+3);}else{
+list.css('left',list.position().left-((deviceAmount-list.data('index')-3)*80));
+list.data('index',deviceAmount-3);}}}})(deviceAmount));
+$('#home-dashboard-wireless-devices-scroll-left').click(function(){
+var list=$('#home-dashboard-wireless-devices').find('.list-devices-horizontal');
+if(list.data('index')>0){
+if(list.data('index')>3){
+list.css('left',list.position().left+240);
+list.data('index',list.data('index')-3);}else{
+list.css('left',list.position().left+(list.data('index')*80));
+list.data('index',0);}}});}else{
+$('#home-dashboard-wireless-devices-scroll-right').hide();
+$('#home-dashboard-wireless-devices-scroll-left').hide();}
+if(0){}else{
+$('#home-dashboard-usb-devices-scroll-up').hide();
+$('#home-dashboard-usb-devices-scroll-down').hide();}
+deviceAmount=$('#home-dashboard-repeater-devices').find('li').length;
+if(deviceAmount>3){
+$('#home-dashboard-repeater-devices-scroll-right').click((function(deviceAmount){
+return function(){
+var list=$('#home-dashboard-repeater-devices').find('.list-devices-horizontal');
+if(list.data('index')==undefined)
+list.data('index',0);
+if(list.data('index')<deviceAmount-3){
+if(deviceAmount-list.data('index')-3>3){
+list.css('left',list.position().left-240);
+list.data('index',list.data('index')+3);}else{
+list.css('left',list.position().left-((deviceAmount-list.data('index')-3)*80));
+list.data('index',deviceAmount-3);}}}})(deviceAmount));
+$('#home-dashboard-repeater-devices-scroll-left').click(function(){
+var list=$('#home-dashboard-repeater-devices').find('.list-devices-horizontal');
+if(list.data('index')>0){
+if(list.data('index')>3){
+list.css('left',list.position().left+240);
+list.data('index',list.data('index')-3);}else{
+list.css('left',list.position().left+(list.data('index')*80));
+list.data('index',0);}}});}else{
+$('#home-dashboard-repeater-devices-scroll-right').hide();
+$('#home-dashboard-repeater-devices-scroll-left').hide();}}
+function loadServiceStatus(){
+if(defroute_wan_ip=="0.0.0.0"&&ipv6_wan_ip=="0:0:0:0:0:0:0:0"){
+$('#internet-status-led').removeClass('icons-leds-small-green').addClass('icons-leds-small-red');
+$('#internet-status').html(arc.i18n._t("general.label.unavailable")).attr('data-i18n','general.label.unavailable').css('color','red');}
+var wifi_status=(getCfg("wl_enable24G")=="0"&&getCfg("wl_enable5G")=="0")?0:1;
+if(wifi_status==0){
+$('#wifi-status-led').removeClass('icons-leds-small-green').addClass('icons-leds-small-red');
+$('#wifi-status').html(arc.i18n._t("general.label.disabled")).attr('data-i18n','general.label.disabled').css('color','red');}
+var call=0;
+if(szSIP_Register_Status!=""){
+var phone=szSIP_Register_Status.split("|");
+var html='';
+for(var i=0;i<phone.length;i++){
+if(phone[i]!=""){
+var num_state=phone[i].split(" ");
+if(num_state[1].indexOf("1")!=-1){
+call=1;
+html+='<div>';
+html+=('<span data-i18n="general.label.phonenumber.prefix">No.</span> '+num_state[0]);
+html+='</div>';}}}
+$('#phone-status-numbers').html(html);}
+if(call==0){
+$('#phone-status-led').removeClass('icons-leds-small-green').addClass('icons-leds-small-red');
+$('#phone-status').html(arc.i18n._t("general.label.unavailable")).attr('data-i18n','general.label.unavailable').css('color','red');}
+if((defroute_wan_ip=="0.0.0.0"&&ipv6_wan_ip=="0:0:0:0:0:0:0:0")||
+getCfg("tv_enable")=="0"||getCfg("tv_vlan")=="-1"){
+$('#tv-status-led').removeClass('icons-leds-small-green').addClass('icons-leds-small-red');
+$('#tv-status').html(arc.i18n._t("general.label.unavailable")).attr('data-i18n','general.label.unavailable').css('color','red');}}
+var hex2bin=function(val){
+var res=parseInt(val,16).toString(2);
+if(res.length<24){
+res="0".repeat(24-res.length)+res;}
+return res;};
+function init(){
+ShowMenu_osp();
+buildDeviceList();
+buildDeviceShiftButton();
+loadServiceStatus();
+$('#mainContainer').click(function(){$('#device-menu').hide();$('#client-menu').hide();});}
+</script>
+<style>#home-dashboard{height:460px; width:700px; font-size:12px; background:url('images/dashboard_mynetwork_livebox_6.png') no-repeat;}#home-refresh-button{position:relative; float:right; right:5px; height:45px; width:124px; text-align:right;}#home-dashboard-services-title{position:absolute; right:0; top:130px; width:160px; text-align:center;}#home-dashboard-services-content{position:absolute; right:5px; top:172px; width:150px;}#home-dashboard-services-content li{line-height:1em; padding-left:15px; min-height:3em; margin-bottom:5px;}#home-dashboard-services-content div.icons{position:absolute; left:0; top:1px;}#home-dashboard-services-content div.label.title{position:relative; left:0; top:0; padding-left:15px; width:130px;}#home-dashboard-wired-label{position:absolute; left:370px; top:110px; line-height:15px; height:15px; width:150px;}#home-dashboard-wired-nodevices{position:absolute; z-index:1; display:none; left:200px; top:40px; width:320px; font-weight:bold; text-align:center;}#home-dashboard-wired-devices{position:absolute; z-index:2; display:block; left:200px; top:5px; height:85px; width:320px; overflow:hidden}#home-dashboard-wired-devices ul{position:relative; left:0; white-space:nowrap; float:left; font-size:0;}#home-dashboard-wired-devices-scroll-left{position:absolute; left:170px; top:37px; height:25px; width:25px; background-image:url('images/arrows-left.png'); cursor:pointer;}#home-dashboard-wired-devices-scroll-right{position:absolute; left:530px; top:37px; height:25px; width:25px; background-image:url('images/arrows-right.png'); cursor:pointer;}#home-dashboard-wireless-zone{position:absolute; z-index:1; left:400px; top:323px; width:305px; height:130px;}#home-dashboard-wireless-img{position:absolute; left:17px; top:6px; width:271px; height:56px; background:url('images/dashboard-bg-wifi.png') no-repeat;}#home-dashboard-wireless-label{position:absolute; left:75px; top:0; padding-left:20px; line-height:15px; height:70px; width:150px;}#home-dashboard-wireless-label div.icons{position:absolute; left:0; top:1px;}#home-dashboard-wireless-label div.label.title{position:relative; left:0; top:0; padding-left:15px; width:130px;}#home-dashboard-wireless-nodevices{position:absolute; z-index:1; display:none; left:30px; top:68px; width:240px; font-weight:bold; text-align:center;}#home-dashboard-wireless-devices{position:absolute; z-index:2; display:block; left:30px; top:58px; height:70px; width:240px; overflow:hidden}#home-dashboard-wireless-devices ul{position:relative; left:0; white-space:nowrap; float:left; font-size:0;}#home-dashboard-wireless-devices-scroll-left{position:absolute; display:block; left:0; top:65px; height:25px; width:25px; background-image:url('images/arrows-left.png'); cursor:pointer;}#home-dashboard-wireless-devices-scroll-right{position:absolute; display:block; left:280px; top:65px; height:25px; width:25px; background-image:url('images/arrows-right.png'); cursor:pointer;}#home-dashboard-repeater-zone{position:absolute; z-index:1; left:90px; top:323px; width:305px; height:130px;}#home-dashboard-repeater-img{position:absolute; left:17px; top:6px; width:271px; height:56px; background:url('images/dashboard-bg-repeater.png') no-repeat;}#home-dashboard-repeater-label{position:absolute; left:75px; top:0; padding-left:20px; line-height:15px; height:70px; width:150px;}#home-dashboard-repeater-label div.icons{position:absolute; left:0; top:1px;}#home-dashboard-repeater-label div.label.title{position:relative; left:0; top:0; padding-left:15px; width:130px;}#home-dashboard-repeater-nodevices{position:absolute; z-index:1; display:none; left:30px; top:68px; width:240px; font-weight:bold; text-align:center;}#home-dashboard-repeater-devices{position:absolute; z-index:2; display:block; left:30px; top:42px; height:90px; width:240px; overflow:hidden}#home-dashboard-repeater-devices ul{position:relative; left:0; white-space:nowrap; float:left; font-size:0;}#home-dashboard-repeater-devices-scroll-left{position:absolute; display:block; left:0; top:65px; height:25px; width:25px; background-image:url('images/arrows-left.png'); cursor:pointer;}#home-dashboard-repeater-devices-scroll-right{position:absolute; display:block; left:280px; top:65px; height:25px; width:25px; background-image:url('images/arrows-right.png'); cursor:pointer;}#home-dashboard-usb-label{display:none; position:absolute; left:165px; top:250px; line-height:15px; height:15px; width:50px; text-align:center;}#home-dashboard-usb-nodevices{position:absolute; z-index:1; display:none; left:30px; top:210px; height:180px; width:130px; font-weight:bold; text-align:center;}#home-dashboard-usb-devices{position:absolute; z-index:2; display:block; left:40px; top:140px; height:210px; width:120px;}#home-dashboard-usb-devices-scroll-up{position:absolute; display:block; left:80px; top:105px; height:25px; width:25px; background-image:url('images/arrows-up.png'); cursor:pointer;}#home-dashboard-usb-devices-scroll-down{position:absolute; display:block; left:80px; top:360px; height:25px; width:25px; background-image:url('images/arrows-down.png'); cursor:pointer;}#home-dashboard-usb-printers-tip{position:absolute; display:block; left:0; top:210px; height:40px; width:40px; background-image:url('images/icons-tip.png'); cursor:pointer;}#home-dashboard-dect-zone{position:absolute; z-index:1; left:135px; top:323px; width:230px; height:130px;}#home-dashboard-dect-img{position:absolute; left:30px; top:0; width:171px; height:48px; background:url('images/dect-zone.png') no-repeat;}#home-dashboard-dect-label{position:absolute; left:130px; top:0; padding-left:0; line-height:15px; height:40px; width:100px;}#home-dashboard-dect-label div.icons{position:absolute; left:0; top:1px;}#home-dashboard-dect-label div.label.title{position:relative; left:0; top:0; padding-left:15px; width:130px;}#home-dashboard-dect-nodevices{position:absolute; z-index:1; display:none; left:30px; top:66px; width:160px; font-weight:bold; text-align:center;}#home-dashboard-dect-devices{position:absolute; z-index:2; display:block; left:30px; top:56px; height:70px; width:160px;}#home-dashboard-dect-devices ul{left:0;/*width:1000px;*/}#home-dashboard-dect-devices-scroll-left{position:absolute; display:block; left:0px; top:63px; height:25px; width:25px; background-image:url('images/arrows-left.png'); cursor:pointer;}#home-dashboard-dect-devices-scroll-right{position:absolute; display:block; left:200px; top:63px; height:25px; width:25px; background-image:url('images/arrows-right.png'); cursor:pointer;}#device-tooltip{position:fixed; z-index:10; padding:3px 10px 3px 10px; border:solid 1px #FF6600; background-color:#F6F6F6;}#device-menu{font:14px Helvetica, Verdana, Arial, sans-serif; background-color:black; position:relative; width:400px; display:none; z-index:100;}#device-menu li{line-height:165%; padding:0 10px;}#device-menu #device-menu-header{color:white; font-weight:bold;}#device-menu li.device-menu-item{border:1px solid #761A1A; border-top:0; color:black; background:white; min-width:190px; cursor:pointer;}#device-menu li.device-menu-item:hover{color:#FFF; background:#FF6600;}#client-menu{border:1px solid #761A1A; font:14px Helvetica, Verdana, Arial, sans-serif; background-color:white; position:absolute; display:none; z-index:100;}#client-menu li{line-height:165%; padding:0 10px;}#client-menu #client-menu-header{color:black; font-weight:bold;}
+ul.list-devices-horizontal li{position:relative; width:80px; height:70px; cursor:pointer; display:inline-block; font-size:12px;}
+ul.list-devices-horizontal li div.title{position:absolute; top:50px; width:100%; height:20px; font-weight:bold; font-size:0.9em; text-align:center;}
+ul.list-devices-horizontal li div.subtitle{position:absolute; top:50px; width:100%; height:20px; font-weight:bold; font-size:0.9em; text-align:center;}
+ul.list-devices-horizontal li div.repsubtitle{position:absolute; top:75px; width:100%; height:20px; font-weight:bold; font-size:0.9em; text-align:center;}
+ul.list-devices-horizontal li div.icon{position:absolute; left:10px; background-repeat:no-repeat;}
+ul.list-devices-horizontal li div.internet-blocked{z-index:100; position:absolute; right:0; width:27px; height:27px; background-image:url("images/internet-blocked.png");}
+ul.list-devices-horizontal li div.internet-avail{z-index:100; position:absolute; right:0; width:27px; height:27px; background-image:url("images/internet-avail.png");}
+div{position:relative;}
+div.icons-leds-small-green{background-image:url("images/icons-leds-small-green.png");}
+div.icons-leds-small-red{background-image:url("images/icons-leds-small-red.png");}
+div.icons-leds-small{width:10px; height:10px; line-height:10px;}
+li{position:relative;}#login_light_box{position:fixed; left:0px; top:0px; width:10000px; height:10000px; opacity:0.607843137254902; z-index:1010; background-color:rgb(47, 79, 79); display:none;}
+</style>
+</head>
+<body onload="pre_init()">
+<div id="mainContainer">
+<script type="text/javascript">
+createMenu();
+</script>
+<form id="mainContent"name="tF"action=""method="post"target="OUTfrm">
+<div style="text-align:left;line-height:1.6em;">
+<a href="network_connected.htm"style="outline:none;text-decoration:underline;cursor:pointer;color:#ff6804;">
+<span data-i18n="general.label.vmenu.home.title">my network</span>
+</a>> <span data-i18n="general.label.vmenu.connecteddevices.title"style="color:#666666;">connected devices</span>
+</div>
+<div class="hr hr-orange"></div>
+<br>
+<h1><span data-i18n="home.label.title">Devices connected to the Livebox</span></h1>
+<div class="hr"></div>
+<h2>
+<span data-i18n="home.label.subtitle">You will find below the devices which are connected to your Livebox. By clicking on the device icons, you can access to advanced configuration menu.</span>
+</h2>
+<br>
+<div id="home-dashboard">
+<div id="home-dashboard-wired-label"data-i18n="home.label.wired">wired network</div>
+<div id="home-dashboard-wired-nodevices">
+<span data-i18n="general.label.nodevices">no device connected</span>
+</div>
+<div id="home-dashboard-wired-devices-scroll-left"class="png scroll-left"></div>
+<div id="home-dashboard-wired-devices-scroll-right"class="png scroll-right"></div>
+<div id="home-dashboard-wired-devices">
+<ul class="list-devices-horizontal"></ul>
+</div>
+<div id="home-dashboard-usb-printers-tip"onclick="top.topFrame.changeLoc(5,'advanced_printer_server.htm');return false;"></div>
+<div id="home-dashboard-usb-label"data-i18n="home.label.usb">USB</div>
+<div id="home-dashboard-usb-nodevices"><span data-i18n="general.label.nodevices">no device connected</span></div>
+<div id="home-dashboard-usb-devices-scroll-up"class="png scroll-up"></div>
+<div id="home-dashboard-usb-devices-scroll-down"class="png scroll-down"></div>
+<div id="home-dashboard-usb-devices">
+<ul class="list-devices-vertical"></ul>
+</div>
+<div id="home-dashboard-wireless-zone">
+<div id="home-dashboard-wireless-img"class="png"></div>
+<div id="home-dashboard-wireless-label">
+<div id="wifi-status-led"class="png icons icons-leds-small icons-leds-small-green"></div>
+<div class="title">
+<span style="font-weight:bold;"data-i18n="general.label.wifi">Wi-Fi</span>&nbsp;&nbsp;
+<span id="wifi-status"style="color:#3caa0a;"data-i18n="general.label.enabled">activated</span>
+<br>
+<span data-i18n="home.label.wireless">Wi-Fi network</span>
+</div>
+</div>
+<div id="home-dashboard-wireless-nodevices">
+<span data-i18n="general.label.nodevices">no device connected</span>
+</div>
+<div id="home-dashboard-wireless-devices-scroll-left"class="png scroll-left"></div>
+<div id="home-dashboard-wireless-devices-scroll-right"class="png scroll-right"></div>
+<div id="home-dashboard-wireless-devices">
+<ul class="list-devices-horizontal"></ul>
+</div>
+</div>
+<div id="home-dashboard-repeater-zone">
+<div id="home-dashboard-repeater-img"class="png"></div>
+<div id="home-dashboard-repeater-nodevices">
+<span data-i18n="general.label.nodevices">no device connected</span>
+</div>
+<div id="home-dashboard-repeater-devices-scroll-left"class="png scroll-left"></div>
+<div id="home-dashboard-repeater-devices-scroll-right"class="png scroll-right"></div>
+<div id="home-dashboard-repeater-devices">
+<ul class="list-devices-horizontal"></ul>
+</div>
+</div>
+<div id="home-dashboard-services-title">
+<h1><span data-i18n="home.label.services">Services</span></h1>
+</div>
+<div id="home-dashboard-services-content">
+<ul>
+<li>
+<div id="internet-status-led"class="png icons icons-leds-small icons-leds-small-green"></div>
+<div class="title">
+<div style="font-weight:bold;"data-i18n="general.label.internet">Internet</div>
+<div id="internet-status"style="color:#3caa0a;"data-i18n="general.label.available">available</div>
+</div>
+</li>
+<li>
+<div id="phone-status-led"class="png icons icons-leds-small icons-leds-small-green"></div>
+<div class="title">
+<div style="font-weight:bold;"data-i18n="general.label.phone">phone</div>
+<div id="phone-status"style="color:#3caa0a;"data-i18n="general.label.available">available</div>
+<div id="phone-status-numbers"></div>
+</div>
+</li>
+<li>
+<div id="tv-status-led"class="png icons icons-leds-small icons-leds-small-green"></div>
+<div class="title">
+<span id="tv-title"style="font-weight:bold;"data-i18n="general.label.tv">TV</span>&nbsp;&nbsp;
+<span id="tv-status"style="color:#3caa0a;"data-i18n="general.label.available">available</span>
+</div>
+</li>
+</ul>
+</div>
+</div>
+<br><br><br><br><br><br><br><br><br><br>
+</form>
+<div id="content-right">
+<div id="home-refresh-button">
+<input type="submit"id="btn-refresh"value="refresh"class="input-btn input-btn-orange-refresh"data-i18n="general.btn.refresh"onclick="location.reload();">
+</div>
+<div id="helpsection"class="input-info-help"style="display:block;margin-top:45px;">
+<div class="header"><h6><span class="translation Translations.general.label.help"data-i18n="general.label.help">help</span></h6></div>
+<div id="helpcontent"class="content"data-i18n="home.label.help">The current Livebox Fibra user interface supports the following browsers; Please be sure that you have one of them&nbsp;:-&nbsp;Internet Explorer&nbsp;:&nbsp;Version IE8 and upper&nbsp;-&nbsp;Mozilla Firefox&nbsp;:&nbsp;Version 3.00 and upper -&nbsp;Chrome&nbsp;:&nbsp;Version 6.0 and upper -&nbsp;Safari&nbsp;:&nbsp;Version 4.0 and upper -&nbsp;Opera&nbsp;:&nbsp;Version 10.00 and upper</div>
+<div class="footer"></div>
+</div>
+<div class="input-info-help">
+<div class="header">
+<h6><span data-i18n="home.didyouknow.label">Did you know&nbsp;?</span></h6>
+</div>
+<div class="content"data-i18n="home.didyouknow.description.first">You can access to your content on a USB key or external hard drive connected to the Livebox Fibra and share from any computers.</div>
+<div class="footer"></div>
+</div>
+</div>
+<div id="progress"class="large reveal-modal"style="display:none">
+<span id="MSG"style="display:none"></span><br><br><br>
+<span>
+<span class="progresspanel"id="progresspanel">
+<div class="progressbar"id="progressbar"></div>
+</span>&nbsp;&nbsp;&nbsp;<span id="timeRemain"style="display:none"></span>
+</span><br>
+<form><span id="Error_btn"style="display:none"><input type="button"class="green"name="err_btn"value="Back"onClick="do_goNext()"></span></form>
+</div>
+<div id="nullprogress"class="reveal-modal"style="display:none"></div>
+</div>
+<div id="device-tooltip"style="display:none;">[Device-Name]</div>
+<div id="device-menu"style="display:none;">
+<ul>
+<li>
+<div id="device-menu-header">[Device-Name]<br>IP address:[Device-IP]</div>
+</li>
+<li class="device-menu-item"id="menu-item-access">
+<span data-i18n="config.access.scheduling.label.menu">Internet access restriction</span>
+</li>
+<li class="device-menu-item"id="menu-item-customize">
+<span data-i18n="home.devicescustomize.label.title">Customize your device</span>
+</li>
+<li class="device-menu-item"id="menu-item-delete">
+<span data-i18n="notconnecteddevices.label.deletedevice">Delete device</span>
+</li>
+<li class="device-menu-item"id="menu-item-files">
+<span data-i18n="general.btn.files">access to my files</span>
+</li>
+<li class="device-menu-item"id="menu-item-eject">
+<span data-i18n="general.btn.eject">eject</span>
+</li>
+<li class="device-menu-item"id="menu-item-repeater">
+<span data-i18n="general.btn.repeater">Access repeater</span>
+</li>
+</ul>
+</div>
+<div id="client-menu"style="display:none;">
+<ul>
+<li>
+<div id="client-menu-header">[Device-Name]<br>IP address:[Device-IP]</div>
+</li>
+</ul>
+</div>
+<div>
+<img title=spacer src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7Ylc1R1VuRmNpRzRLeGYvZWxsT0RZUXVBR2NqdFhqL3VEZll5T0VSYWYrVUVtMkY2NTc5ODUxODE=" border=0>
+</div>
+<div id="footer">
+<div id="footer-menu">
+<a href="legal_information.htm"onclick=""style="color:rgb(102, 102, 102);text-decoration:none;float:right;margin-right:130px;margin-top:20px;">
+<span data-i18n="legal.label.title">Legal information</span>
+</a>
+</div>
+</div>
+</body>
+</html>

@@ -1,4 +1,4 @@
-package main
+package api
 
 import (
 	"fmt"
@@ -8,23 +8,23 @@ import (
 	"strings"
 )
 
-var livebox6TrailingIndexRe = regexp.MustCompile(`^(.+?)(\d+)$`)
+var trailingIndexRe = regexp.MustCompile(`^(.+?)(\d+)$`)
 
-// livebox6StaticIndexRe matches keys of the form static_<field>_<pool>_<idx>,
+// staticIndexRe matches keys of the form static_<field>_<pool>_<idx>,
 // e.g. static_name_0_3. The pools are the LANs: 0 is the main LAN, 1 the
 // guest LAN (see lan.js).
-var livebox6StaticIndexRe = regexp.MustCompile(`^static_([a-z]+)_(\d+)_(\d+)$`)
+var staticIndexRe = regexp.MustCompile(`^static_([a-z]+)_(\d+)_(\d+)$`)
 
 // groupByTrailingIndex groups keys of the form <prefix><name><idx> where idx
 // is a decimal integer at the very end of the key. It returns a map from index
 // to a map of full-key -> value.
-func groupByTrailingIndex(d cgiData, prefix string) map[int]map[string]string {
+func groupByTrailingIndex(d Data, prefix string) map[int]map[string]string {
 	groups := make(map[int]map[string]string)
 	for k, v := range d.entries {
 		if !strings.HasPrefix(k, prefix) {
 			continue
 		}
-		m := livebox6TrailingIndexRe.FindStringSubmatch(k)
+		m := trailingIndexRe.FindStringSubmatch(k)
 		if m == nil {
 			continue
 		}
@@ -51,8 +51,8 @@ func maxKey(m map[int]map[string]string) int {
 	return max
 }
 
-// livebox6Device represents a DHCP lease entry from the infoLan cgi file.
-type livebox6Device struct {
+// Device represents a DHCP lease entry from the infoLan cgi file.
+type Device struct {
 	Name      string
 	IP        string
 	MAC       string
@@ -60,25 +60,25 @@ type livebox6Device struct {
 	Interface string
 }
 
-// livebox6DeviceArrays are the JavaScript array names known to hold the DHCP
-// lease table, in order of preference. The array is laid out as:
+// deviceArrays are the JavaScript array names known to hold the DHCP lease
+// table, in order of preference. The array is laid out as:
 //
 //	[name, ip, mac, leaseTime, interface, name, ip, mac, ...]
-var livebox6DeviceArrays = []string{"dhcp_leaseTime", "dhcp_client"}
+var deviceArrays = []string{"dhcp_leaseTime", "dhcp_client"}
 
-// livebox6ParseDevices parses the DHCP lease array of an infoLan.js or
-// clients.js response into device records.
-func livebox6ParseDevices(raw string) ([]livebox6Device, error) {
-	for _, name := range livebox6DeviceArrays {
+// parseDevices parses the DHCP lease array of an infoLan.js or clients.js
+// response into device records.
+func parseDevices(raw string) ([]Device, error) {
+	for _, name := range deviceArrays {
 		devices, err := parseDeviceArray(raw, name)
 		if err == nil {
 			return devices, nil
 		}
 	}
-	return nil, fmt.Errorf("no DHCP lease array (%s) found", strings.Join(livebox6DeviceArrays, ", "))
+	return nil, fmt.Errorf("no DHCP lease array (%s) found", strings.Join(deviceArrays, ", "))
 }
 
-func parseDeviceArray(raw, varName string) ([]livebox6Device, error) {
+func parseDeviceArray(raw, varName string) ([]Device, error) {
 	marker := "var " + varName + "=["
 	start := strings.Index(raw, marker)
 	if start == -1 {
@@ -98,9 +98,9 @@ func parseDeviceArray(raw, varName string) ([]livebox6Device, error) {
 	if len(tokens)%fieldsPerRecord != 0 {
 		return nil, fmt.Errorf("%s array: expected a multiple of %d fields, got %d", varName, fieldsPerRecord, len(tokens))
 	}
-	devices := make([]livebox6Device, 0, len(tokens)/fieldsPerRecord)
+	devices := make([]Device, 0, len(tokens)/fieldsPerRecord)
 	for i := 0; i < len(tokens); i += fieldsPerRecord {
-		devices = append(devices, livebox6Device{
+		devices = append(devices, Device{
 			Name:      strings.TrimSpace(tokens[i]),
 			IP:        tokens[i+1],
 			MAC:       normalizeMAC(tokens[i+2]),
@@ -153,8 +153,8 @@ func parseJSStringList(s string) ([]string, error) {
 	return tokens, nil
 }
 
-// livebox6PortForward represents a NAT rule from nat_osp.js.
-type livebox6PortForward struct {
+// PortForward represents a NAT rule from nat_osp.js.
+type PortForward struct {
 	ID          string
 	Description string
 	Enabled     bool
@@ -165,9 +165,9 @@ type livebox6PortForward struct {
 	MAC         string
 }
 
-func livebox6ParsePortForwards(data cgiData) []livebox6PortForward {
+func parsePortForwards(data Data) []PortForward {
 	groups := groupByTrailingIndex(data, "nat_")
-	rules := []livebox6PortForward{}
+	rules := []PortForward{}
 	for i := 0; i <= maxKey(groups); i++ {
 		g, ok := groups[i]
 		if !ok {
@@ -177,11 +177,11 @@ func livebox6ParsePortForwards(data cgiData) []livebox6PortForward {
 			continue
 		}
 		description := g[fmt.Sprintf("nat_description%d", i)]
-		rules = append(rules, livebox6PortForward{
+		rules = append(rules, PortForward{
 			ID:          description,
 			Description: description,
 			Enabled:     g[fmt.Sprintf("nat_enable%d", i)] == "1",
-			Protocol:    livebox6ProtocolName(g[fmt.Sprintf("nat_protocol%d", i)]),
+			Protocol:    protocolName(g[fmt.Sprintf("nat_protocol%d", i)]),
 			PublicPort:  g[fmt.Sprintf("nat_public_port%d", i)],
 			PrivateIP:   g[fmt.Sprintf("nat_private_ip%d", i)],
 			PrivatePort: g[fmt.Sprintf("nat_private_port%d", i)],
@@ -191,28 +191,28 @@ func livebox6ParsePortForwards(data cgiData) []livebox6PortForward {
 	return rules
 }
 
-// livebox6DMZ holds the DMZ configuration from fw_dmz_osp.js.
-type livebox6DMZ struct {
+// DMZ holds the DMZ configuration from fw_dmz_osp.js.
+type DMZ struct {
 	Enabled bool
 	HostIP  string
 }
 
-func livebox6ParseDMZ(data cgiData) livebox6DMZ {
-	return livebox6DMZ{
-		Enabled: data.get("dmz_enable") == "1",
-		HostIP:  data.get("host_ip"),
+func parseDMZ(data Data) DMZ {
+	return DMZ{
+		Enabled: data.Get("dmz_enable") == "1",
+		HostIP:  data.Get("host_ip"),
 	}
 }
 
-// livebox6DNSRecord represents a static DNS entry from dns.js.
-type livebox6DNSRecord struct {
+// DNSRecord represents a static DNS entry from dns.js.
+type DNSRecord struct {
 	Hostname string
 	IP       string
 }
 
-func livebox6ParseDNS(data cgiData) []livebox6DNSRecord {
+func parseDNS(data Data) []DNSRecord {
 	groups := groupByTrailingIndex(data, "dns_")
-	records := []livebox6DNSRecord{}
+	records := []DNSRecord{}
 	for i := 0; i <= maxKey(groups); i++ {
 		g, ok := groups[i]
 		if !ok {
@@ -223,25 +223,25 @@ func livebox6ParseDNS(data cgiData) []livebox6DNSRecord {
 		if host == "" && ip == "" {
 			continue
 		}
-		records = append(records, livebox6DNSRecord{Hostname: host, IP: ip})
+		records = append(records, DNSRecord{Hostname: host, IP: ip})
 	}
 	return records
 }
 
-// livebox6StaticLease represents a static DHCP lease from lan_dhcp_static.js.
-type livebox6StaticLease struct {
+// StaticLease represents a static DHCP lease from lan_dhcp_static.js.
+type StaticLease struct {
 	Name   string
 	MAC    string
 	IP     string
 	Active bool
 }
 
-func livebox6ParseStaticLeases(data cgiData) []livebox6StaticLease {
+func parseStaticLeases(data Data) []StaticLease {
 	// Keys are static_<field>_<pool>_<idx>; pool 0 is the main LAN.
 	byIdx := make(map[int]map[string]string)
 	maxIdx := -1
 	for k, v := range data.entries {
-		m := livebox6StaticIndexRe.FindStringSubmatch(k)
+		m := staticIndexRe.FindStringSubmatch(k)
 		if m == nil || m[2] != "0" {
 			continue
 		}
@@ -255,7 +255,7 @@ func livebox6ParseStaticLeases(data cgiData) []livebox6StaticLease {
 		}
 	}
 
-	leases := []livebox6StaticLease{}
+	leases := []StaticLease{}
 	for i := 0; i <= maxIdx; i++ {
 		g, ok := byIdx[i]
 		if !ok {
@@ -267,7 +267,7 @@ func livebox6ParseStaticLeases(data cgiData) []livebox6StaticLease {
 		if name == "" && mac == "" && ip == "" {
 			continue
 		}
-		leases = append(leases, livebox6StaticLease{
+		leases = append(leases, StaticLease{
 			Name:   name,
 			MAC:    mac,
 			IP:     ip,
@@ -277,17 +277,17 @@ func livebox6ParseStaticLeases(data cgiData) []livebox6StaticLease {
 	return leases
 }
 
-// livebox6WLAN holds a snapshot of the Wi-Fi configuration from wlan_combine.js.
-type livebox6WLAN struct {
+// WLAN holds a snapshot of the Wi-Fi configuration from wlan_combine.js.
+type WLAN struct {
 	Band24Enabled bool
 	Band5Enabled  bool
 	Band6Enabled  bool
-	SSIDs         []livebox6SSID
+	SSIDs         []SSID
 }
 
-// livebox6SSID represents the primary BSS of one band from wlan_combine.js.
+// SSID represents the primary BSS of one band from wlan_combine.js.
 // Guest BSSes (wl_ssid24G1, wl_ssid24G3, ...) are not parsed.
-type livebox6SSID struct {
+type SSID struct {
 	Band     string
 	SSID     string
 	Enabled  bool
@@ -296,51 +296,51 @@ type livebox6SSID struct {
 	Key      string
 }
 
-func livebox6ParseWLAN(data cgiData) livebox6WLAN {
-	wlan := livebox6WLAN{
-		Band24Enabled: data.get("wl_enable24G") == "1",
-		Band5Enabled:  data.get("wl_enable5G") == "1",
-		Band6Enabled:  data.get("wl_enable6G") == "1",
+func parseWLAN(data Data) WLAN {
+	wlan := WLAN{
+		Band24Enabled: data.Get("wl_enable24G") == "1",
+		Band5Enabled:  data.Get("wl_enable5G") == "1",
+		Band6Enabled:  data.Get("wl_enable6G") == "1",
 	}
 
 	for _, band := range []string{"24G", "5G", "6G"} {
-		ssid := data.get(fmt.Sprintf("wl_ssid%s", band))
-		enabled := data.get(fmt.Sprintf("wl_enable%s", band)) == "1"
+		ssid := data.Get(fmt.Sprintf("wl_ssid%s", band))
+		enabled := data.Get(fmt.Sprintf("wl_enable%s", band)) == "1"
 		if ssid == "" && !enabled {
 			// 6 GHz may not be present on all models.
 			continue
 		}
-		wlan.SSIDs = append(wlan.SSIDs, livebox6SSID{
+		wlan.SSIDs = append(wlan.SSIDs, SSID{
 			Band:     band,
 			SSID:     ssid,
 			Enabled:  enabled,
-			Hidden:   data.get(fmt.Sprintf("wl_ssid_hide%s", band)) == "1",
-			Security: data.get(fmt.Sprintf("security_type%s", band)),
-			Key:      data.get(fmt.Sprintf("sharedkey%s", band)),
+			Hidden:   data.Get(fmt.Sprintf("wl_ssid_hide%s", band)) == "1",
+			Security: data.Get(fmt.Sprintf("security_type%s", band)),
+			Key:      data.Get(fmt.Sprintf("sharedkey%s", band)),
 		})
 	}
 	return wlan
 }
 
-// livebox6Speed holds the WAN sync rates from infoInternet.js.
-type livebox6Speed struct {
+// Speed holds the WAN sync rates from infoInternet.js.
+type Speed struct {
 	DownstreamKbps int
 	UpstreamKbps   int
 }
 
-func livebox6ParseSpeed(data cgiData) (livebox6Speed, error) {
-	if !data.has("DownstreamCurrRate") || !data.has("UpstreamCurrRate") {
-		return livebox6Speed{}, fmt.Errorf("WAN sync rates not available; the router may be connected through fiber (GPON)")
+func parseSpeed(data Data) (Speed, error) {
+	if !data.Has("DownstreamCurrRate") || !data.Has("UpstreamCurrRate") {
+		return Speed{}, fmt.Errorf("WAN sync rates not available; the router may be connected through fiber (GPON)")
 	}
-	down, err := strconv.Atoi(data.get("DownstreamCurrRate"))
+	down, err := strconv.Atoi(data.Get("DownstreamCurrRate"))
 	if err != nil {
-		return livebox6Speed{}, fmt.Errorf("parsing DownstreamCurrRate: %w", err)
+		return Speed{}, fmt.Errorf("parsing DownstreamCurrRate: %w", err)
 	}
-	up, err := strconv.Atoi(data.get("UpstreamCurrRate"))
+	up, err := strconv.Atoi(data.Get("UpstreamCurrRate"))
 	if err != nil {
-		return livebox6Speed{}, fmt.Errorf("parsing UpstreamCurrRate: %w", err)
+		return Speed{}, fmt.Errorf("parsing UpstreamCurrRate: %w", err)
 	}
-	return livebox6Speed{DownstreamKbps: down, UpstreamKbps: up}, nil
+	return Speed{DownstreamKbps: down, UpstreamKbps: up}, nil
 }
 
 // normalizeMAC tries to turn a router MAC string into the canonical
@@ -355,8 +355,8 @@ func normalizeMAC(s string) string {
 	return m.String()
 }
 
-// livebox6ProtocolName maps the router protocol number to a readable name.
-func livebox6ProtocolName(p string) string {
+// protocolName maps the router protocol number to a readable name.
+func protocolName(p string) string {
 	switch p {
 	case "1":
 		return "icmp"

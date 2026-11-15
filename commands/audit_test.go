@@ -6,7 +6,7 @@ import (
 	"github.com/guillermolam/livebox/api"
 )
 
-func TestFilterClients(t *testing.T) {
+func TestFilterClientsDetail(t *testing.T) {
 	clients := []api.ClientDetail{
 		{Name: "Laptop", IP: "192.168.1.10", MAC: "AA:BB:CC:DD:EE:FF"},
 		{Name: "Phone", IP: "192.168.1.20", MAC: "11:22:33:44:55:66"},
@@ -26,9 +26,9 @@ func TestFilterClients(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := filterClients(clients, tc.target)
+			got := filterClientsDetail(clients, tc.target)
 			if len(got) != tc.wantLen {
-				t.Fatalf("filterClients(%q) returned %d client(s), want %d", tc.target, len(got), tc.wantLen)
+				t.Fatalf("filterClientsDetail(%q) returned %d client(s), want %d", tc.target, len(got), tc.wantLen)
 			}
 		})
 	}

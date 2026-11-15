@@ -39,8 +39,8 @@ func NewClient(ctx context.Context, address, username, password string) (*Client
 	}
 	base := fmt.Sprintf("http://%s", address)
 
-	// 1. Fetch the login page and extract the AES key and IV from its spacer
-	// image.
+	// 1. Fetch the login page and extract the AES key and IV, and the page's
+	// own httoken, from its spacer image.
 	page, err := httpGet(ctx, client, base+"/login.htm")
 	if err != nil {
 		return nil, fmt.Errorf("fetching the login page: %w", err)
@@ -49,6 +49,9 @@ func NewClient(ctx context.Context, address, username, password string) (*Client
 	if err != nil {
 		return nil, err
 	}
+	// The browser includes the login page's httoken in the POST body (seen in
+	// HAR captures); include it when the page carries one.
+	loginToken, _ := tokenFromPage(page)
 
 	userField, err := loginField(username, key, iv)
 	if err != nil {
@@ -64,6 +67,9 @@ func NewClient(ctx context.Context, address, username, password string) (*Client
 		"dfr597hf": {userField},
 		"cnlvd2xh": {passField},
 		"login":    {"Login"},
+	}
+	if loginToken != "" {
+		form.Set("httoken", loginToken)
 	}
 	req, err := http.NewRequestWithContext(ctx, "POST", base+"/login.cgi", strings.NewReader(form.Encode()))
 	if err != nil {

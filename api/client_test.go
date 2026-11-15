@@ -12,14 +12,16 @@ import (
 func TestClientGetCGI(t *testing.T) {
 	var requestURL string
 	var requestHeaders http.Header
+	var loginBody []byte
 	var loggedIn bool
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/login.htm":
-			io.WriteString(w, spacerPage(keyIV()))
+			io.WriteString(w, spacerPage(append(keyIV(), testToken...)))
 		case "/login.cgi":
 			loggedIn = true
+			loginBody, _ = io.ReadAll(r.Body)
 			http.Redirect(w, r, "/network_connected.htm", http.StatusFound)
 		case "/network_connected.htm":
 			if !loggedIn {
@@ -55,6 +57,9 @@ func TestClientGetCGI(t *testing.T) {
 	}
 	if !strings.Contains(requestURL, "_tn="+testToken) {
 		t.Errorf("request URL missing token: %s", requestURL)
+	}
+	if !strings.Contains(string(loginBody), "httoken="+testToken) {
+		t.Errorf("login POST missing httoken: %s", string(loginBody))
 	}
 	if !strings.Contains(requestURL, "_t=") || !strings.Contains(requestURL, "_=") {
 		t.Errorf("request URL missing cache busters: %s", requestURL)

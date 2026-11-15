@@ -1,4 +1,4 @@
-module github.com/maelvls/livebox
+module github.com/guillermolam/livebox
 
 go 1.27.4
 

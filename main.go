@@ -98,7 +98,7 @@ func saveConfig(config Config) error {
 func main() {
 	rootCmd := &cobra.Command{
 		Use:   "livebox",
-		Short: "A CLI for interacting with a Livebox 6 or 7 (Orange)",
+		Short: "A CLI for interacting with a Livebox 6 (Orange)",
 
 		// SilenceUsage prevents Cobra from displaying the command's and
 		// subcommands' usage on errors. Most of the errors have nothing to do

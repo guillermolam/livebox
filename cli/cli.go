@@ -44,6 +44,7 @@ func Run() {
 		commands.RebootCommand(),
 		commands.PhoneCommand(),
 		commands.SpeedCommand(),
+		commands.FiberCommand(),
 		commands.PortForwardCommand(),
 		commands.PinholeCommand(),
 		commands.APICommand(),

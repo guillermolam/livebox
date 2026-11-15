@@ -1,27 +1,22 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net"
-	"net/http"
 	"net/netip"
 	"os"
+	"os/signal"
 	"slices"
 	"strings"
-	"time"
 
+	"charm.land/lipgloss/v2"
+	"charm.land/lipgloss/v2/table"
 	"github.com/charmbracelet/fang"
 	"github.com/charmbracelet/huh"
-	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/lipgloss/table"
-	"github.com/goccy/go-yaml"
 	"github.com/maelvls/undent"
 	"github.com/spf13/cobra"
+	"go.yaml.in/yaml/v3"
 )
 
 var (
@@ -37,18 +32,29 @@ type Config struct {
 	Password string `yaml:"password"`
 }
 
+func configPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to find the home directory: %w", err)
+	}
+	return home + "/.config/livebox.yml", nil
+}
+
 func loadConfig() (Config, error) {
 	config := Config{
 		Address:  "192.168.1.1",
 		Username: "admin",
 	}
 
-	configPath := os.Getenv("HOME") + "/.config/livebox.yml"
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+	path, err := configPath()
+	if err != nil {
+		return config, err
+	}
+	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return config, nil // Use default config if file doesn't exist
 	}
 
-	configFile, err := os.ReadFile(configPath)
+	configFile, err := os.ReadFile(path)
 	if err != nil {
 		return config, fmt.Errorf("failed to read config file: %w", err)
 	}
@@ -62,19 +68,26 @@ func loadConfig() (Config, error) {
 }
 
 func saveConfig(config Config) error {
-	configPath := os.Getenv("HOME") + "/.config/livebox.yml"
+	path, err := configPath()
+	if err != nil {
+		return err
+	}
 	configFile, err := yaml.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
 	// Create the necessary directories if they don't exist.
-	err = os.MkdirAll(os.Getenv("HOME")+"/.config", 0755)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to find the home directory: %w", err)
+	}
+	err = os.MkdirAll(home+"/.config", 0755)
 	if err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
-	err = os.WriteFile(configPath, configFile, 0600)
+	err = os.WriteFile(path, configFile, 0600)
 	if err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
@@ -85,7 +98,7 @@ func saveConfig(config Config) error {
 func main() {
 	rootCmd := &cobra.Command{
 		Use:   "livebox",
-		Short: "A CLI for interacting with a Livebox 4 or 5 (Orange)",
+		Short: "A CLI for interacting with a Livebox 6 or 7 (Orange)",
 
 		// SilenceUsage prevents Cobra from displaying the command's and
 		// subcommands' usage on errors. Most of the errors have nothing to do
@@ -121,176 +134,51 @@ func main() {
 		dnsCmd(),
 	)
 
-	err := fang.Execute(context.Background(), rootCmd)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	err := fang.Execute(ctx, rootCmd)
 	if err != nil {
 		fmt.Println("Error:", err)
 		os.Exit(1)
 	}
 }
 
-// Address is of the form `hostname[:port]` or `IP[:port]`.
-func authenticate(address, username, password string) (contextID string, sessid *http.Cookie, _ error) {
-	authURL := fmt.Sprintf("http://%s/ws", address)
-	payloadBytes, err := json.Marshal(map[string]any{
-		"service": "sah.Device.Information",
-		"method":  "createContext",
-		"parameters": map[string]any{
-			"applicationName": "webui",
-			"username":        username,
-			"password":        password,
-		},
-	})
-	if err != nil {
-		return "", nil, fmt.Errorf("failed to marshal auth payload: %w", err)
+func mergeFlagsWithConfig(config Config) (address, username, password string) {
+	address = liveboxAddress
+	if address == "" {
+		address = config.Address
 	}
-
-	req, err := http.NewRequest("POST", authURL, bytes.NewBuffer(payloadBytes))
-	if err != nil {
-		return "", nil, fmt.Errorf("failed to create auth request: %w", err)
+	username = liveboxUsername
+	if username == "" {
+		username = config.Username
 	}
-
-	setHostHeader(req)
-	req.Header.Set("Authorization", "X-Sah-Login")
-	req.Header.Set("Content-Type", "application/x-sah-ws-4-call+json")
-
-	// Execute the request
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", nil, fmt.Errorf("failed to execute auth request: %w", err)
+	password = liveboxPassword
+	if password == "" {
+		password = config.Password
 	}
-	defer resp.Body.Close()
-
-	// Read the response body
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", nil, fmt.Errorf("failed to read auth response body: %w", err)
-	}
-
-	var result struct {
-		Status int `json:"status"`
-		Data   struct {
-			ContextID string `json:"contextID"`
-		} `json:"data"`
-	}
-	err = json.Unmarshal(bodyBytes, &result)
-	if err != nil {
-		return "", nil, fmt.Errorf("while parsing the auth response '%s': %w", string(bodyBytes), err)
-	}
-
-	if result.Status != 0 {
-		return "", nil, fmt.Errorf("authentication failed: status %d, body: %s", result.Status, string(bodyBytes))
-	}
-
-	// Parse the Set-Cookie header to extract the sessid cookie.
-	sessid, err = parseCookie(resp.Header.Get("Set-Cookie"))
-	if err != nil {
-		return "", nil, fmt.Errorf("failed to parse cookie: %w", err)
-	}
-
-	return result.Data.ContextID, sessid, nil
+	return address, username, password
 }
 
-// You can get the err info using:
-//
-//	var apiErrs APIErrors
-//	errors.As(err, &apiErrs)
-func executeRequest(address, contextID string, cookie *http.Cookie, service, method string, parameters map[string]any) (string, error) {
-	requestURL := fmt.Sprintf("http://%s/ws", address)
-
-	payload := map[string]any{
-		"service":    service,
-		"method":     method,
-		"parameters": parameters,
-	}
-	payloadBytes, err := json.Marshal(payload)
+// clientFromConfig logs in to the Livebox using the flags and configuration.
+func clientFromConfig(ctx context.Context) (*livebox6Client, error) {
+	config, err := loadConfig()
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal payload: %w", err)
+		return nil, err
 	}
-
-	req, err := http.NewRequest("POST", requestURL, bytes.NewBuffer(payloadBytes))
-	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
-	}
-
-	setHostHeader(req)
-	req.Header.Set("Authorization", "X-Sah "+contextID)
-	req.Header.Set("Content-Type", "application/x-sah-ws-1-call+json")
-	req.AddCookie(cookie)
-	req.AddCookie(&http.Cookie{Name: "sah/contextId", Value: contextID})
-	req.Header.Set("X-Context", contextID)
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("failed to execute request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to read response body: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(bodyBytes))
-	}
-
-	var result struct {
-		Result struct {
-			Status any       `json:"status"`
-			Errors APIErrors `json:"errors"`
-		} `json:"result"`
-	}
-	err = json.Unmarshal([]byte(bodyBytes), &result)
-	if err != nil {
-		return "", fmt.Errorf("failed to unmarshal result: %w", err)
-	}
-	if len(result.Result.Errors) > 0 {
-		var errs []string
-		for _, err := range result.Result.Errors {
-			errs = append(errs, fmt.Sprintf("  * %d: %s: %s", err.ErrorCode, err.Description, err.Info))
-		}
-		return "", fmt.Errorf("while running method '%s' on service %s:\n%w", method, service, APIErrors(result.Result.Errors))
-	}
-
-	return string(bodyBytes), nil
+	address, username, password := mergeFlagsWithConfig(config)
+	return newLivebox6Client(ctx, address, username, password)
 }
 
-type APIErrors []APIError
-
-func (e APIErrors) Error() string {
-	var errs []string
-	for _, err := range e {
-		errs = append(errs, fmt.Sprintf("  * %d: %s: %s", err.ErrorCode, err.Description, err.Info))
-	}
-	return strings.Join(errs, "\n")
-}
-
-func (e APIErrors) GetCode(code int) (APIError, bool) {
-	for _, err := range e {
-		if err.ErrorCode == code {
-			return err, true
-		}
-	}
-	return APIError{}, false
-}
-
-type APIError struct {
-	ErrorCode   int    `json:"error"`
-	Description string `json:"description"`
-	Info        string `json:"info"`
-}
-
-func (e APIError) Error() string {
-	return fmt.Sprintf("%d: %s: %s", e.ErrorCode, e.Description, e.Info)
-}
+// errLivebox6WriteNotImplemented is returned by every command that changes
+// the router configuration: the apply_abstract.cgi payloads are not known yet.
+var errLivebox6WriteNotImplemented = errors.New("this command is not yet implemented for Livebox 6/7; capture the browser action and send the HAR to add support")
 
 func loginCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "login",
 		Short: "Authenticate to the livebox and save the information",
 		RunE: func(cmd *cobra.Command, args []string) error {
-
 			config, err := loadConfig()
 			if err != nil {
 				return err
@@ -298,16 +186,13 @@ func loginCmd() *cobra.Command {
 
 			var fields []huh.Field
 
-			// Load the current configuration and prompt the user for new
-			// values.
+			// Let's let the user know if the username and password already
+			// work.
 			c, err := loadConfig()
 			if err != nil {
 				return fmt.Errorf("failed to load configuration: %w", err)
 			}
-
-			// Let's let the user know if the username and password already
-			// work.
-			_, _, err = authenticate(c.Address, c.Username, c.Password)
+			_, err = newLivebox6Client(cmd.Context(), c.Address, c.Username, c.Password)
 			if err == nil {
 				fields = append(fields, huh.NewNote().
 					Title("🎉 Your credentials are already working. You can still update them if you want."),
@@ -339,7 +224,7 @@ func loginCmd() *cobra.Command {
 			}
 
 			// Check that the new config works.
-			_, _, err = authenticate(c.Address, c.Username, c.Password)
+			_, err = newLivebox6Client(cmd.Context(), c.Address, c.Username, c.Password)
 			if err != nil {
 				return fmt.Errorf("failed to authenticate with new configuration: %w", err)
 			}
@@ -355,195 +240,50 @@ func loginCmd() *cobra.Command {
 	}
 }
 
+func printTable(headers []string, rows [][]string) {
+	t := table.New().
+		Border(lipgloss.NormalBorder()).
+		Headers(headers...).
+		Rows(rows...)
+	fmt.Println(t.String())
+}
+
+// sortByIP sorts devices by their IPv4 address.
+func sortDevicesByIP(devices []livebox6Device) {
+	slices.SortFunc(devices, func(a, b livebox6Device) int {
+		aAddr, aErr := netip.ParseAddr(a.IP)
+		bAddr, bErr := netip.ParseAddr(b.IP)
+		if aErr != nil || bErr != nil {
+			return strings.Compare(a.IP, b.IP)
+		}
+		return aAddr.Compare(bAddr)
+	})
+}
+
 func lsCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "ls",
 		Short: "List all devices known and their IPs",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			config, err := loadConfig()
-			if err != nil {
-				return err
-			}
-			address, username, password := mergeFlagsWithConfig(config)
-
-			contextID, cookie, err := authenticate(address, username, password)
+			client, err := clientFromConfig(cmd.Context())
 			if err != nil {
 				return err
 			}
 
-			response, err := executeRequest(address, contextID, cookie, "TopologyDiagnostics", "buildTopology", map[string]any{"SendXmlFile": false})
+			devices, err := client.Devices(cmd.Context())
 			if err != nil {
 				return err
 			}
+			sortDevicesByIP(devices)
 
-			// Extract the devices from the response.
-			var data struct {
-				Result struct {
-					Status []struct {
-						LastUpdate            time.Time `json:"LastUpdate"`
-						DiagnosticMode        string    `json:"DiagnosticMode"`
-						APIVersion            string    `json:"APIVersion"`
-						Key                   string    `json:"Key"`
-						DiscoverySource       string    `json:"DiscoverySource"`
-						Name                  string    `json:"Name"`
-						DeviceType            string    `json:"DeviceType"`
-						Active                bool      `json:"Active"`
-						Tags                  string    `json:"Tags"`
-						FirstSeen             time.Time `json:"FirstSeen"`
-						LastConnection        time.Time `json:"LastConnection"`
-						LastChanged           time.Time `json:"LastChanged"`
-						Master                string    `json:"Master"`
-						Location              string    `json:"Location"`
-						Owner                 string    `json:"Owner"`
-						Manufacturer          string    `json:"Manufacturer"`
-						ModelName             string    `json:"ModelName"`
-						Description           string    `json:"Description"`
-						SerialNumber          string    `json:"SerialNumber"`
-						ProductClass          string    `json:"ProductClass"`
-						HardwareVersion       string    `json:"HardwareVersion"`
-						SoftwareVersion       string    `json:"SoftwareVersion"`
-						BootLoaderVersion     string    `json:"BootLoaderVersion"`
-						FirewallLevel         string    `json:"FirewallLevel"`
-						LinkType              string    `json:"LinkType"`
-						LinkState             string    `json:"LinkState"`
-						ConnectionProtocol    string    `json:"ConnectionProtocol"`
-						ConnectionState       string    `json:"ConnectionState"`
-						LastConnectionError   string    `json:"LastConnectionError"`
-						ConnectionIPv4Address string    `json:"ConnectionIPv4Address"`
-						ConnectionIPv6Address string    `json:"ConnectionIPv6Address"`
-						RemoteGateway         string    `json:"RemoteGateway"`
-						DNSServers            string    `json:"DNSServers"`
-						Internet              bool      `json:"Internet"`
-						Iptv                  bool      `json:"IPTV"`
-						Telephony             bool      `json:"Telephony"`
-						DownstreamCurrRate    int       `json:"DownstreamCurrRate"`
-						UpstreamCurrRate      int       `json:"UpstreamCurrRate"`
-						DownstreamMaxBitRate  int       `json:"DownstreamMaxBitRate"`
-						UpstreamMaxBitRate    int       `json:"UpstreamMaxBitRate"`
-						Index                 string    `json:"Index"`
-						Alternative           []string  `json:"Alternative"`
-						Locations             []any     `json:"Locations"`
-						Groups                []any     `json:"Groups"`
-						Ssw                   struct {
-							Capabilities string `json:"Capabilities"`
-							CurrentMode  string `json:"CurrentMode"`
-						} `json:"SSW"`
-						Names []struct {
-							Name   string `json:"Name"`
-							Source string `json:"Source"`
-							Suffix string `json:"Suffix"`
-							ID     string `json:"Id"`
-						} `json:"Names"`
-						DeviceTypes []struct {
-							Type   string `json:"Type"`
-							Source string `json:"Source"`
-							ID     string `json:"Id"`
-						} `json:"DeviceTypes"`
-						Children []Child `json:"Children"`
-					} `json:"status"`
-				} `json:"result"`
-			}
-			err = json.Unmarshal([]byte(response), &data)
-			if err != nil {
-				return fmt.Errorf("failed to unmarshal response: %w", err)
-			}
-			if len(data.Result.Status) == 0 {
-				return fmt.Errorf("response does not contain the result.status field")
-			}
-
-			devices := flatten(data.Result.Status[0].Children)
-
-			var rows [][]string
+			rows := make([][]string, 0, len(devices))
 			for _, device := range devices {
-				if device.IPAddress == "" {
-					continue
-				}
-				rows = append(rows, []string{device.Name, device.IPAddress, device.PhysAddress})
+				rows = append(rows, []string{device.Name, device.IP, device.MAC})
 			}
-			t := table.New().
-				Border(lipgloss.NormalBorder()).
-				Headers("Name", "IP Address", "MAC Address").
-				Rows(rows...)
-
-			fmt.Println(t.String())
-
+			printTable([]string{"Name", "IP Address", "MAC Address"}, rows)
 			return nil
 		},
 	}
-}
-
-func flatten(children []Child) []Child {
-	var devices []Child
-	for _, child := range children {
-		child := child
-		devices = append(devices, flatten(child.Children)...)
-		child.Children = nil
-		devices = append(devices, child)
-	}
-	return devices
-}
-
-type Child struct {
-	Key             string    `json:"Key"`
-	DiscoverySource string    `json:"DiscoverySource"`
-	Name            string    `json:"Name"`
-	DeviceType      string    `json:"DeviceType"`
-	Active          bool      `json:"Active"`
-	Tags            string    `json:"Tags"`
-	FirstSeen       time.Time `json:"FirstSeen"`
-	LastConnection  time.Time `json:"LastConnection"`
-	LastChanged     time.Time `json:"LastChanged"`
-	Master          string    `json:"Master"`
-	BusName         string    `json:"BusName,omitempty"`
-	Index           string    `json:"Index"`
-	Names           []struct {
-		Name   string `json:"Name"`
-		Source string `json:"Source"`
-		Suffix string `json:"Suffix"`
-		ID     string `json:"Id"`
-	} `json:"Names"`
-	DeviceTypes            []any   `json:"DeviceTypes"`
-	Children               []Child `json:"Children,omitempty"`
-	PortState              string  `json:"PortState,omitempty"`       // "Connected"
-	PhysAddress            string  `json:"PhysAddress,omitempty"`     // "0A:7D:5C:93:78:5A"
-	Layer2Interface        string  `json:"Layer2Interface,omitempty"` // "wl0"
-	InterfaceName          string  `json:"InterfaceName,omitempty"`   // "wl0"
-	MACVendor              string  `json:"MACVendor,omitempty"`       // Always empty.
-	NetDevName             string  `json:"NetDevName,omitempty"`
-	NetDevIndex            int     `json:"NetDevIndex,omitempty"`
-	IPAddress              string  `json:"IPAddress,omitempty"`
-	IPAddressSource        string  `json:"IPAddressSource,omitempty"`
-	DHCPv4ServerPool       string  `json:"DHCPv4ServerPool,omitempty"`
-	DHCPv4ServerEnable     bool    `json:"DHCPv4ServerEnable,omitempty"`
-	DHCPv4ServerMinAddress string  `json:"DHCPv4ServerMinAddress,omitempty"`
-	DHCPv4ServerMaxAddress string  `json:"DHCPv4ServerMaxAddress,omitempty"`
-	DHCPv4ServerNetmask    string  `json:"DHCPv4ServerNetmask,omitempty"`
-	DHCPv4DomainName       string  `json:"DHCPv4DomainName,omitempty"`
-	IPv4Address            []struct {
-		Address       string `json:"Address"`
-		Status        string `json:"Status"`
-		Scope         string `json:"Scope"`
-		AddressSource string `json:"AddressSource"`
-		Reserved      bool   `json:"Reserved"`
-		ID            string `json:"Id"`
-	} `json:"IPv4Address,omitempty"`
-	IPv6Address []struct {
-		Address       string `json:"Address"`
-		Status        string `json:"Status"`
-		Scope         string `json:"Scope"`
-		AddressSource string `json:"AddressSource"`
-		ID            string `json:"Id"`
-	} `json:"IPv6Address,omitempty"`
-	Location  string `json:"Location,omitempty"`
-	Owner     string `json:"Owner,omitempty"`
-	Locations []any  `json:"Locations,omitempty"`
-	Groups    []any  `json:"Groups,omitempty"`
-}
-
-type Device struct {
-	IPAddress   string
-	PhysAddress string
-	Name        string
 }
 
 func rebootCmd() *cobra.Command {
@@ -551,24 +291,7 @@ func rebootCmd() *cobra.Command {
 		Use:   "reboot",
 		Short: "Reboots the livebox",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			config, err := loadConfig()
-			if err != nil {
-				return err
-			}
-			address, username, password := mergeFlagsWithConfig(config)
-
-			contextID, cookie, err := authenticate(address, username, password)
-			if err != nil {
-				return err
-			}
-
-			_, err = executeRequest(address, contextID, cookie, "NMC", "reboot", map[string]any{"reason": "GUI_Reboot"})
-			if err != nil {
-				return err
-			}
-
-			fmt.Println("Livebox is rebooting...")
-			return nil
+			return errLivebox6WriteNotImplemented
 		},
 	}
 }
@@ -578,24 +301,7 @@ func phoneCmd() *cobra.Command {
 		Use:   "phone",
 		Short: "Show recent phone calls",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			config, err := loadConfig()
-			if err != nil {
-				return err
-			}
-			address, username, password := mergeFlagsWithConfig(config)
-
-			contextID, cookie, err := authenticate(address, username, password)
-			if err != nil {
-				return err
-			}
-
-			response, err := executeRequest(address, contextID, cookie, "VoiceService.VoiceApplication", "getCallList", map[string]any{"line": "1"})
-			if err != nil {
-				return err
-			}
-
-			fmt.Println(response)
-			return nil
+			return errLivebox6WriteNotImplemented
 		},
 	}
 }
@@ -603,52 +309,21 @@ func phoneCmd() *cobra.Command {
 func speedCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "speed",
-		Short: "Show the DSL Downstream and Upstream speeds",
+		Short: "Show the Downstream and Upstream speeds",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			config, err := loadConfig()
-			if err != nil {
-				return err
-			}
-			address, username, password := mergeFlagsWithConfig(config)
-
-			contextID, cookie, err := authenticate(address, username, password)
+			client, err := clientFromConfig(cmd.Context())
 			if err != nil {
 				return err
 			}
 
-			response, err := executeRequest(address, contextID, cookie, "NeMo.Intf.data", "getMIBs", map[string]any{
-				"mibs": "dsl",
-			})
+			speed, err := client.Speed(cmd.Context())
 			if err != nil {
 				return err
 			}
 
-			var data struct {
-				Result struct {
-					Status struct {
-						Dsl struct {
-							Dsl0 struct {
-								DownstreamCurrRate int `json:"DownstreamCurrRate"`
-								UpstreamCurrRate   int `json:"UpstreamCurrRate"`
-							} `json:"dsl0"`
-						} `json:"dsl"`
-					} `json:"status"`
-				} `json:"result"`
-			}
-			err = json.Unmarshal([]byte(response), &data)
-			if err != nil {
-				return fmt.Errorf("failed to unmarshal response: %w", err)
-			}
-
-			if data.Result.Status.Dsl.Dsl0.DownstreamCurrRate == 0 && data.Result.Status.Dsl.Dsl0.UpstreamCurrRate == 0 {
-				return fmt.Errorf("no DSL data found. Note that this command only works for DSL connections, not fiber.")
-			}
-
-			downstreamCurrRate := float64(data.Result.Status.Dsl.Dsl0.DownstreamCurrRate)
-			upstreamCurrRate := float64(data.Result.Status.Dsl.Dsl0.UpstreamCurrRate)
 			fmt.Printf("\033[91m↓ %.1f Mbps\033[0m\n\033[92m↑ %.1f Mbps\033[0m\n",
-				downstreamCurrRate*0.96/1000,
-				upstreamCurrRate*0.96/1000)
+				float64(speed.DownstreamKbps)/1000,
+				float64(speed.UpstreamKbps)/1000)
 			return nil
 		},
 	}
@@ -657,208 +332,25 @@ func speedCmd() *cobra.Command {
 func pinholeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "pinhole",
-		Short: "Manage pinhole rules",
+		Short: "Manage IPv6 pinhole rules",
 		Long: undent.Undent(`
 			Manage IPv6 pinhole rules.
 		`),
-		Example: undent.Undent(`
-			pinhole ls
-			pinhole set mypinhole --to-port 443 --to-ip
-		`),
 	}
 
-	cmd.AddCommand(
-		pinholeLsCmd(),
-		pinholeSetCmd(),
-		pinholeRmCmd(),
-	)
+	for _, use := range []string{"ls", "set", "rm"} {
+		use := use
+		cmd.AddCommand(&cobra.Command{
+			Use:                use,
+			Short:              "Not yet implemented for Livebox 6/7",
+			FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
+			RunE: func(cmd *cobra.Command, args []string) error {
+				return errLivebox6WriteNotImplemented
+			},
+		})
+	}
 
 	return cmd
-}
-
-func pinholeLsCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "ls",
-		Short: "List all pinhole rules",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			config, err := loadConfig()
-			if err != nil {
-				return err
-			}
-			address, username, password := mergeFlagsWithConfig(config)
-
-			contextID, cookie, err := authenticate(address, username, password)
-			if err != nil {
-				return err
-			}
-
-			response, err := executeRequest(address, contextID, cookie, "Firewall", "getPinhole", map[string]any{})
-			if err != nil {
-				return err
-			}
-
-			var data struct {
-				Result struct {
-					Status map[string]struct {
-						ID                    string `json:"Id"`
-						Origin                string `json:"Origin"`
-						Description           string `json:"Description"`
-						Status                string `json:"Status"`
-						SourceInterface       string `json:"SourceInterface"`
-						Protocol              string `json:"Protocol"`
-						IPVersion             int    `json:"IPVersion"`
-						SourcePort            string `json:"SourcePort"`
-						DestinationPort       string `json:"DestinationPort"`
-						SourcePrefix          string `json:"SourcePrefix"`
-						DestinationIPAddress  string `json:"DestinationIPAddress"`
-						DestinationMACAddress string `json:"DestinationMACAddress"`
-						Enable                bool   `json:"Enable"`
-					} `json:"status"`
-				} `json:"result"`
-			}
-			err = json.Unmarshal([]byte(response), &data)
-			if err != nil {
-				return fmt.Errorf("failed to unmarshal response: %w", err)
-			}
-
-			var rows [][]string
-			for _, rule := range data.Result.Status {
-				rows = append(rows, []string{
-					rule.ID,
-					fmt.Sprintf("%s/%s", rule.DestinationPort, protocToString(rule.Protocol)),
-					rule.DestinationIPAddress,
-				})
-			}
-			t := table.New().
-				Border(lipgloss.NormalBorder()).
-				Headers("ID", "to IP", "to port").
-				Rows(rows...)
-
-			fmt.Println(t.String())
-
-			return nil
-		},
-	}
-}
-
-func protocToString(protocol string) string {
-	switch protocol {
-	case "6":
-		return "tcp"
-	case "17":
-		return "udp"
-	default:
-		return "unknown"
-	}
-}
-
-func pinholeSetCmd() *cobra.Command {
-	var toPort, toIP, toMAC string
-	var useUDP bool
-	cmd := &cobra.Command{
-		Use:   "set",
-		Short: "Set a firewall rule for IPv4",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			config, err := loadConfig()
-			if err != nil {
-				return err
-			}
-			address, username, password := mergeFlagsWithConfig(config)
-			contextID, cookie, err := authenticate(address, username, password)
-			if err != nil {
-				return err
-			}
-
-			// Parse the flags
-			if len(args) != 1 {
-				return fmt.Errorf("expected a single argument: the name of pinhole")
-			}
-			name := args[0]
-
-			protocol := "6" // TCP
-			if useUDP {
-				protocol = "17" // UDP
-			}
-
-			if len(toMAC) > 0 {
-				toMAC = strings.ToLower(toMAC) // API handles mac address in lower case
-			}
-
-			params := map[string]any{
-				"id":                    name,
-				"origin":                "webui",
-				"sourceInterface":       "data",
-				"sourcePort":            "",
-				"destinationPort":       toPort,
-				"destinationIPAddress":  toIP,
-				"destinationMACAddress": toMAC,
-				"sourcePrefix":          "",
-				"protocol":              protocol,
-				"ipversion":             6,
-				"enable":                true,
-				"persistent":            true, // IPv6 only.
-			}
-
-			_, err = executeRequest(address, contextID, cookie, "Firewall", "setPinhole", params)
-			if err != nil {
-				return err
-			}
-
-			_, err = executeRequest(address, contextID, cookie, "Firewall", "commit", map[string]any{})
-			if err != nil {
-				return err
-			}
-
-			return nil
-		},
-	}
-
-	cmd.Flags().StringVar(&toPort, "to-port", "", "Destination port")
-	cmd.Flags().StringVar(&toIP, "to-ip", "", "Destination IP address")
-	cmd.Flags().StringVar(&toMAC, "to-mac", "", "Destination MAC address")
-	cmd.Flags().BoolVar(&useUDP, "udp", false, "Use UDP instead of TCP. Default is TCP")
-
-	cmd.MarkFlagRequired("to-port")
-	cmd.MarkFlagRequired("to-ip")
-	cmd.MarkFlagRequired("to-mac")
-
-	return cmd
-}
-
-func pinholeRmCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "rm",
-		Short: "Remove a pinhole rule",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			config, err := loadConfig()
-			if err != nil {
-				return err
-			}
-			address, username, password := mergeFlagsWithConfig(config)
-
-			contextID, cookie, err := authenticate(address, username, password)
-			if err != nil {
-				return err
-			}
-
-			if len(args) != 1 {
-				return fmt.Errorf("expected a single argument: the name of the rule")
-			}
-			name := args[0]
-
-			payload := map[string]any{
-				"id": name,
-			}
-
-			response, err := executeRequest(address, contextID, cookie, "Firewall", "deletePinhole", payload)
-			if err != nil {
-				return err
-			}
-
-			fmt.Println(response)
-			return nil
-		},
-	}
 }
 
 func portForwardCmd() *cobra.Command {
@@ -870,15 +362,13 @@ func portForwardCmd() *cobra.Command {
 		`),
 		Example: undent.Undent(`
 			port-forward ls
-			port-forward set [--udp] pi443 --from-port 443 --to-port 443 --to-ip 192.168.1.160 --to-mac E4:5F:01:A6:65:FE
-			port-forward rm pi443
 		`),
 	}
 
 	cmd.AddCommand(
 		portForwardLsCmd(),
-		portForwardSetCmd(),
-		portForwardRmCmd(),
+		portForwardWriteCmd("set", "Set a port forwarding rule"),
+		portForwardWriteCmd("rm", "Remove a port forwarding rule"),
 	)
 
 	return cmd
@@ -888,253 +378,39 @@ func portForwardLsCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "ls",
 		Short: "List all port forwarding rules",
-		Long: undent.Undent(`
-			List all port forwarding rules. By default, it sets a TCP rule. To set a UDP rule, use the --udp flag.
-		`),
-		Example: undent.Undent(`
-			port-forward set [--udp] pi443 --from-port 443 --to-port 443 --to-ip 192.168.1.160 --to-mac E4:5F:01:A6:65:FE
-		`),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			config, err := loadConfig()
-			if err != nil {
-				return err
-			}
-			address, username, password := mergeFlagsWithConfig(config)
-
-			contextID, cookie, err := authenticate(address, username, password)
+			client, err := clientFromConfig(cmd.Context())
 			if err != nil {
 				return err
 			}
 
-			response, err := executeRequest(address, contextID, cookie, "Firewall", "getPortForwarding", map[string]any{})
+			rules, err := client.PortForwards(cmd.Context())
 			if err != nil {
 				return err
 			}
 
-			var data struct {
-				Result struct {
-					Status map[string]struct {
-						ID                    string `json:"Id"`
-						Origin                string `json:"Origin"`
-						Description           string `json:"Description"`
-						Status                string `json:"Status"`
-						SourceInterface       string `json:"SourceInterface"`
-						Protocol              string `json:"Protocol"`
-						ExternalPort          string `json:"ExternalPort"`
-						InternalPort          string `json:"InternalPort"`
-						SourcePrefix          string `json:"SourcePrefix"`
-						DestinationIPAddress  string `json:"DestinationIPAddress"`
-						DestinationMACAddress string `json:"DestinationMACAddress"`
-						LeaseDuration         int    `json:"LeaseDuration"`
-						HairpinNAT            bool   `json:"HairpinNAT"`
-						SymmetricSNAT         bool   `json:"SymmetricSNAT"`
-						UPnPV1Compat          bool   `json:"UPnPV1Compat"`
-						Enable                bool   `json:"Enable"`
-					} `json:"status"`
-				} `json:"result"`
-			}
-			err = json.Unmarshal([]byte(response), &data)
-			if err != nil {
-				return fmt.Errorf("failed to unmarshal response: %w", err)
-			}
-			var rows [][]string
-			for _, rule := range data.Result.Status {
+			rows := make([][]string, 0, len(rules))
+			for _, rule := range rules {
 				rows = append(rows, []string{
 					rule.ID,
-					fmt.Sprintf("%s/%s", rule.ExternalPort, protocToString(rule.Protocol)),
-					rule.DestinationIPAddress,
-					rule.InternalPort,
+					fmt.Sprintf("%s/%s", rule.PublicPort, rule.Protocol),
+					rule.PrivateIP,
+					rule.PrivatePort,
 				})
 			}
-			t := table.New().
-				Border(lipgloss.NormalBorder()).
-				Headers("ID", "from", "to IP", "to port").
-				Rows(rows...)
-
-			fmt.Println(t.String())
-
+			printTable([]string{"ID", "from", "to IP", "to port"}, rows)
 			return nil
 		},
 	}
 }
 
-func portForwardSetCmd() *cobra.Command {
-	var fromPort, toPort, toIP, toMAC string
-	var useUDP bool
-	cmd := &cobra.Command{
-		Use:   "set",
-		Short: "Set a port forwarding rule",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			config, err := loadConfig()
-			if err != nil {
-				return err
-			}
-			address, username, password := mergeFlagsWithConfig(config)
-			contextID, cookie, err := authenticate(address, username, password)
-			if err != nil {
-				return err
-			}
-
-			if len(args) != 1 {
-				return fmt.Errorf("expected a single argument: the name of the rule")
-			}
-			name := args[0]
-
-			protocol := "6" // TCP
-			if useUDP {
-				protocol = "17" // UDP
-			}
-
-			if len(toMAC) > 0 {
-				toMAC = strings.ToLower(toMAC) // API handles mac address in lower case
-			}
-
-			params := map[string]any{
-				"id":                    "webui_" + name,
-				"description":           name,
-				"sourcePort":            "",
-				"externalPort":          fromPort,
-				"internalPort":          toPort,
-				"destinationIPAddress":  toIP,
-				"destinationMACAddress": toMAC, // Can be left empty.
-				"enable":                true,
-				"persistent":            true,
-				"protocol":              protocol,
-				"sourceInterface":       "data",
-				"origin":                "webui",
-				"sourcePrefix":          "",
-				"ipversion":             4, // IPv4 only.
-			}
-
-			response, err := executeRequest(address, contextID, cookie, "Firewall", "setPortForwarding", params)
-			var sErr APIErrors
-			switch {
-			case errors.As(err, &sErr):
-				// Check if the rule is overlapping another rule. The error is:
-				//  {"error": 1114120,"description": "Overlapping rule","info": "Port overlap detected: port[41642-41642] name[webui_tailscale2]"}
-				e, ok := sErr.GetCode(1114120)
-				if ok {
-					return fmt.Errorf(undent.Undent(`
-						%s
-						You can remove the overlapping rule using:
-						  livebox port-forward rm (<name>|<id>)
-					`), e.Info)
-				}
-			case err != nil:
-				return err
-			}
-
-			// To be parsed:
-			// 	{"result":{"status":"webui_pi443","data":{"sourcePort":"","rule":{"Id":"webui_pi443","Origin":"webui","Description":"pi443","Status":"Error","SourceInterface":"data","Protocol":"6","ExternalPort":"443","ExternalPortEndRange":0,"InternalPort":"443","SourcePrefix":"","DestinationIPAddress":"192.168.1.160","DestinationMACAddress":"E4:5F:01:A6:65:FE","LeaseDuration":0,"HairpinNAT":true,"SymmetricSNAT":false,"UPnPV1Compat":false,"Enable":true}}}}
-			var data struct {
-				Result struct {
-					Data struct {
-						Rule struct {
-							Status        string `json:"Status"` // "Enabled", "Error".
-							LeaseDuration int    `json:"LeaseDuration"`
-							HairpinNAT    bool   `json:"HairpinNAT"`
-							SymmetricSNAT bool   `json:"SymmetricSNAT"`
-							UPnPV1Compat  bool   `json:"UPnPV1Compat"`
-							Enable        bool   `json:"Enable"`
-						} `json:"rule"`
-					} `json:"data"`
-				} `json:"result"`
-			}
-			err = json.Unmarshal([]byte(response), &data)
-			if err != nil {
-				return fmt.Errorf("failed to unmarshal response: %w", err)
-			}
-
-			if data.Result.Data.Rule.Status != "Enabled" {
-				return fmt.Errorf("failed to enable rule: %s", data.Result.Data.Rule.Status)
-			}
-
-			fmt.Printf("Successfully set rule. Lease duration: %d, Hairpin NAT: %t, Symmetric SNAT: %t\n",
-				data.Result.Data.Rule.LeaseDuration,
-				data.Result.Data.Rule.HairpinNAT,
-				data.Result.Data.Rule.SymmetricSNAT,
-			)
-			return nil
-		},
-	}
-	cmd.Flags().StringVar(&fromPort, "from-port", "", "Port to be forwarded")
-	cmd.Flags().StringVar(&toPort, "to-port", "", "Destination port")
-	cmd.Flags().StringVar(&toIP, "to-ip", "", "Destination IP address")
-	cmd.Flags().StringVar(&toMAC, "to-mac", "", "Destination MAC address")
-	cmd.Flags().BoolVar(&useUDP, "udp", false, "Use UDP instead of TCP. Default is TCP")
-
-	cmd.MarkFlagRequired("from-port")
-	cmd.MarkFlagRequired("to-port")
-	cmd.MarkFlagRequired("to-ip")
-	return cmd
-}
-
-func portForwardRmCmd() *cobra.Command {
+func portForwardWriteCmd(use, short string) *cobra.Command {
 	return &cobra.Command{
-		Use:   "rm",
-		Short: "Remove a port forwarding rule",
-		Args:  cobra.ExactArgs(1),
-		Long: undent.Undent(`
-			Remove a port forwarding rule. The argument is the name of the rule as seen in the UI. You can also pass the ID of the rule, which would be the name prefixed by "webui_".
-		`),
-		Example: undent.Undent(`
-			port-forward rm (<name>|<id>)
-			port-forward rm pi443
-			port-forward rm webui_pi443
-		`),
+		Use:                use,
+		Short:              short,
+		FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) != 1 {
-				return fmt.Errorf("expected a single argument: the name of the rule to remove")
-			}
-			id := args[0]
-
-			config, err := loadConfig()
-			if err != nil {
-				return err
-			}
-			address, username, password := mergeFlagsWithConfig(config)
-			contextID, cookie, err := authenticate(address, username, password)
-			if err != nil {
-				return err
-			}
-
-			// If the ID doesn't start with "webui_", we add it.
-			if !strings.HasPrefix(id, "webui_") {
-				id = "webui_" + id
-			}
-
-			params := map[string]any{
-				"id":     id,
-				"origin": "webui",
-			}
-			response, err := executeRequest(address, contextID, cookie, "Firewall", "deletePortForwarding", params)
-			var aErr APIErrors
-			switch {
-			case errors.As(err, &aErr):
-				// Let's give a nice message when the rule doesn't exist. For
-				// context, the error looks like this:
-				//  1114115: Object not found: webui_tailscale2
-				e, ok := aErr.GetCode(1114115)
-				if ok {
-					return fmt.Errorf("rule not found: %s", e.Info)
-				}
-			case err != nil:
-				return fmt.Errorf("failed to remove rule: %w", err)
-			}
-
-			var data struct {
-				Result struct {
-					Status bool `json:"status"`
-				} `json:"result"`
-			}
-			err = json.Unmarshal([]byte(response), &data)
-			if err != nil {
-				return fmt.Errorf("failed to unmarshal response: %w", err)
-			}
-			if !data.Result.Status {
-				return fmt.Errorf("failed to remove rule, body: %s", response)
-			}
-			return nil
+			return errLivebox6WriteNotImplemented
 		},
 	}
 }
@@ -1148,15 +424,13 @@ func staticLeaseCmd() *cobra.Command {
 		`),
 		Example: undent.Undent(`
 			static-lease ls
-			static-lease set 00:11:22:33:44:55 192.168.1.160
-			static-lease rm 00:11:22:33:44:55
 		`),
 	}
 
 	cmd.AddCommand(
 		staticLeaseLsCmd(),
-		staticLeaseSetCmd(),
-		staticLeaseRmCmd(),
+		staticLeaseWriteCmd("set", "Set a static lease"),
+		staticLeaseWriteCmd("rm", "Remove a static lease"),
 	)
 
 	return cmd
@@ -1167,255 +441,39 @@ func staticLeaseLsCmd() *cobra.Command {
 		Use:   "ls",
 		Short: "List all static leases",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			config, err := loadConfig()
-			if err != nil {
-				return err
-			}
-			address, username, password := mergeFlagsWithConfig(config)
-			contextID, cookie, err := authenticate(address, username, password)
+			client, err := clientFromConfig(cmd.Context())
 			if err != nil {
 				return err
 			}
 
-			leases, err := getStaticLeases(address, contextID, cookie)
+			leases, err := client.StaticLeases(cmd.Context())
 			if err != nil {
-				return fmt.Errorf("failed to get static leases: %w", err)
+				return err
 			}
 
-			var rows [][]string
+			rows := make([][]string, 0, len(leases))
 			for _, lease := range leases {
-				rows = append(rows, []string{
-					lease.MACAddress,
-					lease.IPAddress,
-				})
+				active := "no"
+				if lease.Active {
+					active = "yes"
+				}
+				rows = append(rows, []string{lease.Name, lease.MAC, lease.IP, active})
 			}
-			t := table.New().
-				Border(lipgloss.NormalBorder()).
-				Headers("MAC address", "IP address").
-				Rows(rows...)
-
-			fmt.Println(t.String())
-
+			printTable([]string{"Name", "MAC address", "IP address", "Active"}, rows)
 			return nil
 		},
 	}
 }
 
-func staticLeaseRmCmd() *cobra.Command {
+func staticLeaseWriteCmd(use, short string) *cobra.Command {
 	return &cobra.Command{
-		Use:   "rm",
-		Short: "Remove a static lease",
-		Args:  cobra.ExactArgs(1),
+		Use:                use,
+		Short:              short,
+		FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			config, err := loadConfig()
-			if err != nil {
-				return err
-			}
-			address, username, password := mergeFlagsWithConfig(config)
-			contextID, cookie, err := authenticate(address, username, password)
-			if err != nil {
-				return err
-			}
-
-			mac := strings.ToLower(args[0]) // API handles mac address in lower case
-
-			leases, err := getStaticLeases(address, contextID, cookie)
-			if err != nil {
-				return fmt.Errorf("failed to get static leases: %w", err)
-			}
-
-			var leasePath string
-			for _, lease := range leases {
-				if lease.MACAddress == mac {
-					leasePath = lease.LeasePath
-					break
-				}
-			}
-
-			if leasePath == "" {
-				return fmt.Errorf("no lease found for MAC %s", mac)
-			}
-
-			params := map[string]any{
-				"MACAddress": mac,
-			}
-
-			_, err = executeRequest(address, contextID, cookie, "DHCPv4.Server.Pool.default", "deleteStaticLease", params)
-			if err != nil {
-				return err
-			}
-
-			return nil
+			return errLivebox6WriteNotImplemented
 		},
 	}
-}
-
-func staticLeaseSetCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "set",
-		Short: "Set an static lease",
-		Long: undent.Undent(`
-			Set a static lease.
-		`),
-		Example: undent.Undent(`
-			dns set D8:10:68:8A:E9:C4 my-custom-name
-		`),
-		Args: cobra.ExactArgs(2),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			config, err := loadConfig()
-			if err != nil {
-				return err
-			}
-			address, username, password := mergeFlagsWithConfig(config)
-			contextID, cookie, err := authenticate(address, username, password)
-			if err != nil {
-				return err
-			}
-
-			mac := strings.ToLower(args[0]) // API handles mac address in lower case
-			ip := args[1]
-
-			leases, err := getStaticLeases(address, contextID, cookie)
-			if err != nil {
-				return fmt.Errorf("failed to get static leases: %w", err)
-			}
-
-			for _, lease := range leases {
-				if macAddrEqual(lease.MACAddress, mac) && lease.IPAddress == ip {
-					fmt.Println("Lease already present, nothing to do")
-					return nil
-				}
-				if lease.IPAddress == ip {
-					return fmt.Errorf("IP address %s already has a lease for the MAC %s", ip, lease.MACAddress)
-				}
-				if lease.MACAddress == mac {
-					return fmt.Errorf("MAC address already reserved for the IP %s", lease.IPAddress)
-				}
-			}
-
-			params := map[string]any{
-				"MACAddress": mac,
-				"IPAddress":  ip,
-			}
-
-			_, err = executeRequest(address, contextID, cookie, "DHCPv4.Server.Pool.default", "addStaticLease", params)
-			// Example of error response:
-			//  * 0: Success: MACAddress
-			//  * 393221: IP address already reserved:
-			//  * 196639: Function execution failed: addStaticLease
-			var apiErrs APIErrors
-			if errors.As(err, &apiErrs) {
-				for _, apiErr := range apiErrs {
-					if apiErr.ErrorCode == 393221 {
-						return fmt.Errorf("IP address already reserved")
-					}
-				}
-			}
-			if err != nil {
-				return err
-			}
-
-			return nil
-		},
-	}
-
-	return cmd
-}
-
-func macAddrEqual(mac1, mac2 string) bool {
-	mac1Addr, _ := net.ParseMAC(mac1)
-	mac2Addr, _ := net.ParseMAC(mac2)
-	return mac1Addr.String() == mac2Addr.String()
-}
-
-func dmzGetCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "get",
-		Short: "Get the current IP configured in the DMZ",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			config, err := loadConfig()
-			if err != nil {
-				return err
-			}
-			address, username, password := mergeFlagsWithConfig(config)
-			contextID, cookie, err := authenticate(address, username, password)
-			if err != nil {
-				return err
-			}
-
-			ip, err := getDMZ(address, contextID, cookie)
-			if err != nil {
-				if errors.Is(err, ErrNoDMZ) {
-					return fmt.Errorf("no DMZ configured")
-				}
-				return err
-			}
-
-			fmt.Println(ip)
-			return nil
-		},
-	}
-}
-
-func dmzSetCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "set",
-		Short: "Set the DMZ configuration",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			config, err := loadConfig()
-			if err != nil {
-				return err
-			}
-			address, username, password := mergeFlagsWithConfig(config)
-			contextID, cookie, err := authenticate(address, username, password)
-			if err != nil {
-				return err
-			}
-
-			if len(args) != 1 {
-				return fmt.Errorf("expected a single argument: the IPv4 address to set as DMZ")
-			}
-			ip := args[0]
-
-			err = setDMZ(address, contextID, cookie, ip)
-			if err != nil {
-				return fmt.Errorf("failed to set DMZ: %w", err)
-			}
-
-			return nil
-		},
-	}
-
-	return cmd
-}
-
-type StaticLease struct {
-	IPAddress  string `json:"IPAddress"`
-	MACAddress string `json:"MACAddress"`
-	LeasePath  string `json:"LeasePath"`
-}
-
-func getStaticLeases(address, contextID string, cookie *http.Cookie) ([]StaticLease, error) {
-	params := map[string]any{
-		"default": "",
-	}
-	response, err := executeRequest(address, contextID, cookie, "DHCPv4.Server.Pool.default", "getStaticLeases", params)
-	if err != nil {
-		return nil, err
-	}
-
-	var data struct {
-		Result struct {
-			Status []StaticLease `json:"status"`
-		} `json:"result"`
-	}
-	err = json.Unmarshal([]byte(response), &data)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
-	}
-
-	return data.Result.Status, nil
 }
 
 func dmzCmd() *cobra.Command {
@@ -1427,211 +485,79 @@ func dmzCmd() *cobra.Command {
 		`),
 		Example: undent.Undent(`
 			dmz get
-			dmz set <ip>
-			dmz rm
 		`),
 	}
 
 	cmd.AddCommand(
 		dmzGetCmd(),
-		dmzSetCmd(),
-		dmzRmCmd(),
+		dmzWriteCmd("set", "Set the DMZ configuration"),
+		dmzWriteCmd("rm", "Remove the DMZ configuration"),
 	)
 
 	return cmd
 }
 
-func dmzRmCmd() *cobra.Command {
+func dmzGetCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "rm",
-		Short: "Remove the DMZ configuration.",
-		Long: undent.Undent(`
-			Remove the DMZ configuration.
-			There is only one DMZ configuration possible, so no need to specify an IP address.
-		`),
+		Use:   "get",
+		Short: "Get the current IP configured in the DMZ",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			config, err := loadConfig()
-			if err != nil {
-				return err
-			}
-			address, username, password := mergeFlagsWithConfig(config)
-			contextID, cookie, err := authenticate(address, username, password)
+			client, err := clientFromConfig(cmd.Context())
 			if err != nil {
 				return err
 			}
 
-			err = deleteDMZ(address, contextID, cookie)
+			dmz, err := client.DMZ(cmd.Context())
 			if err != nil {
-				return fmt.Errorf("failed to delete DMZ: %w", err)
+				return err
 			}
 
+			if !dmz.Enabled || dmz.HostIP == "" || dmz.HostIP == "0.0.0.0" {
+				fmt.Println("No DMZ configured")
+				return nil
+			}
+			fmt.Println(dmz.HostIP)
 			return nil
 		},
 	}
 }
 
-var (
-	ErrNoDMZ = fmt.Errorf("no DMZ configured")
-)
-
-// To know if no DMZ was found, you can use:
-//
-//	errors.Is(err, ErrNoDMZ)
-func getDMZ(address, contextID string, cookie *http.Cookie) (ip string, _ error) {
-	response, err := executeRequest(address, contextID, cookie, "Firewall", "getDMZ", map[string]any{})
-	if err != nil {
-		return "", err
+func dmzWriteCmd(use, short string) *cobra.Command {
+	return &cobra.Command{
+		Use:                use,
+		Short:              short,
+		FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return errLivebox6WriteNotImplemented
+		},
 	}
-
-	var data struct {
-		Result struct {
-			Status struct {
-				WebUI struct {
-					SourceInterface      string `json:"SourceInterface"`      // "data"
-					DestinationIPAddress string `json:"DestinationIPAddress"` // "192.168.1.160"
-					SourcePrefix         string `json:"SourcePrefix"`         // ""
-					Status               string `json:"Status"`               // "Enabled"
-					Enable               bool   `json:"Enable"`               // true
-				} `json:"webui"`
-			} `json:"status"`
-		} `json:"result"`
-	}
-	err = json.Unmarshal([]byte(response), &data)
-	if err != nil {
-		return "", fmt.Errorf("failed to unmarshal response: %w", err)
-	}
-	if data.Result.Status.WebUI.Status == "" {
-		return "", ErrNoDMZ
-	}
-
-	return data.Result.Status.WebUI.DestinationIPAddress, nil
-}
-
-func setDMZ(address, contextID string, cookie *http.Cookie, ip string) error {
-	resp, err := executeRequest(address, contextID, cookie, "Firewall", "setDMZ", map[string]any{
-		"id":                   "webui",
-		"sourceInterface":      "data",
-		"destinationIPAddress": ip,
-		"enable":               true,
-	})
-	if err != nil {
-		return err
-	}
-
-	var data struct {
-		Result struct {
-			Status string `json:"status"`
-		} `json:"result"`
-	}
-	err = json.Unmarshal([]byte(resp), &data)
-	if err != nil {
-		return err
-	}
-	if data.Result.Status != "webui" {
-		return fmt.Errorf("failed to set DMZ: %s", resp)
-	}
-
-	return nil
-}
-
-func deleteDMZ(address, contextID string, cookie *http.Cookie) error {
-	ip, err := getDMZ(address, contextID, cookie)
-	switch {
-	case errors.Is(err, ErrNoDMZ):
-		fmt.Println("No DMZ configured, nothing to do")
-		return nil
-	case err != nil:
-		return fmt.Errorf("failed to get DMZ: %w", err)
-	}
-
-	fmt.Printf("Removing DMZ for IP %s\n", ip)
-
-	resp, err := executeRequest(address, contextID, cookie, "Firewall", "deleteDMZ", map[string]any{
-		"id": "webui",
-	})
-	if err != nil {
-		return err
-	}
-
-	var data struct {
-		Result struct {
-			Status bool `json:"status"` // true
-		} `json:"result"`
-	}
-	err = json.Unmarshal([]byte(resp), &data)
-	if err != nil {
-		return err
-	}
-	if !data.Result.Status {
-		return fmt.Errorf("failed to delete DMZ: %s", resp)
-	}
-
-	return nil
-}
-
-func mergeFlagsWithConfig(config Config) (address, username, password string) {
-	address = liveboxAddress
-	if address == "" {
-		address = config.Address
-	}
-	username = liveboxUsername
-	if username == "" {
-		username = config.Username
-	}
-	password = liveboxPassword
-	if password == "" {
-		password = config.Password
-	}
-	return address, username, password
 }
 
 func apiCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "api",
-		Short: "Send a raw API request from stdin",
+		Use:   "api <cgi-page>",
+		Short: "Fetch a raw cgi data file from the router",
+		Long: undent.Undent(`
+			Fetch a raw cgi data file from the router and print it to stdout.
+			Useful for exploring the router data while write support is being
+			reverse-engineered.
+		`),
+		Example: undent.Undent(`
+			api nat_osp
+			api wlan_combine
+		`),
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			config, err := loadConfig()
-			if err != nil {
-				return err
-			}
-			address, username, password := mergeFlagsWithConfig(config)
-
-			contextID, cookie, err := authenticate(address, username, password)
+			client, err := clientFromConfig(cmd.Context())
 			if err != nil {
 				return err
 			}
 
-			// Read the JSON payload from stdin.
-			payloadBytes, err := io.ReadAll(os.Stdin)
+			data, err := client.getCGI(cmd.Context(), args[0])
 			if err != nil {
-				return fmt.Errorf("failed to read payload from stdin: %w", err)
+				return err
 			}
-
-			requestURL := fmt.Sprintf("http://%s/ws", address)
-			req, err := http.NewRequest("POST", requestURL, bytes.NewBuffer(payloadBytes))
-			if err != nil {
-				return fmt.Errorf("failed to create request: %w", err)
-			}
-
-			setHostHeader(req)
-			req.Header.Set("Authorization", "X-Sah "+contextID)
-			req.Header.Set("Content-Type", "application/x-sah-ws-4-call+json")
-			req.AddCookie(cookie)
-			req.AddCookie(&http.Cookie{Name: "sah/contextId", Value: contextID})
-			req.Header.Set("X-Context", contextID)
-
-			client := &http.Client{}
-			resp, err := client.Do(req)
-			if err != nil {
-				return fmt.Errorf("failed to execute request: %w", err)
-			}
-			defer resp.Body.Close()
-
-			// Print body to stdout.
-			_, err = io.Copy(os.Stdout, resp.Body)
-			if err != nil {
-				return fmt.Errorf("failed to print response to stdout: %w", err)
-			}
+			fmt.Print(data.raw)
 			return nil
 		},
 	}
@@ -1640,308 +566,117 @@ func apiCmd() *cobra.Command {
 func wifiCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "wifi",
-		Short: "Set the WLAN configuration",
-		Long: undent.Undent(`
-			Set the WLAN configuration. Without a pass, the security is set to "None". With a pass, the security is set to "WP2-Personal".
-		`),
+		Short: "View and manage the Wi-Fi configuration",
 		Example: undent.Undent(`
-			wifi config --ssid "Wifi-Valais" --pass "foobar" --24ghz --5ghz
-			wifi config --ssid "Wifi-Valais" --pass "foobar"
-			wifi config --24ghz --ssid "Wifi-Valais" --pass "foobar"
-			wifi config --5ghz --ssid "Wifi-Valais_5GHz" --pass "foobar"
-			wifi disable
-			wifi enable
-			wifi disable --24ghz
-			wifi enable --5ghz
+			wifi
+			wifi status
 		`),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return wifiStatus(cmd)
+		},
 	}
 
-	var (
-		ghz24 bool
-		ghz5  bool
-	)
-
-	cmd.PersistentFlags().BoolVar(&ghz24, "24ghz", false, "Apply settings to 2.4GHz band")
-	cmd.PersistentFlags().BoolVar(&ghz5, "5ghz", false, "Apply settings to 5GHz band")
-
-	wlanEnableCmd := func() *cobra.Command {
-		cmd := &cobra.Command{
-			Use:   "enable",
-			Short: "Enable WLAN",
-			RunE:  enableDisableWLANCmd(&ghz5, &ghz24, "enable"),
-		}
-		return cmd
-	}()
-	wlanDisableCmd := func() *cobra.Command {
-		cmd := &cobra.Command{
-			Use:   "disable",
-			Short: "Disable WLAN",
-			RunE:  enableDisableWLANCmd(&ghz5, &ghz24, "disable"),
-		}
-		return cmd
-	}()
-
-	wlanConfigCmd := func() *cobra.Command {
-		var ssid, pass string
-		cmd := &cobra.Command{
-			Use:   "config",
-			Short: "Configure WLAN settings",
-			RunE: func(cmd *cobra.Command, args []string) error {
-				config, err := loadConfig()
-				if err != nil {
-					return err
-				}
-				address, username, password := mergeFlagsWithConfig(config)
-
-				contextID, cookie, err := authenticate(address, username, password)
-				if err != nil {
-					return err
-				}
-
-				// Determine the security mode based on whether a password is provided.
-				securityMode := "None"
-				if pass != "" {
-					securityMode = "WP2-Personal"
-				}
-
-				// If neither 2.4GHz nor 5GHz is specified, apply to both.
-				if !ghz24 && !ghz5 {
-					ghz24 = true
-					ghz5 = true
-				}
-
-				wlanvap := make(map[string]any)
-				if ghz24 {
-					wlanvap["wl0"] = map[string]any{
-						"SSID":                     ssid,
-						"SSIDAdvertisementEnabled": true,
-						"Security":                 map[string]any{"ModeEnabled": securityMode, "KeyPassPhrase": pass},
-						"MACFiltering":             map[string]any{"Mode": "Off"},
-						"WPS":                      map[string]any{"Enable": false},
-					}
-				}
-				if ghz5 {
-					wlanvap["eth4"] = map[string]any{
-						"SSID":                     ssid,
-						"SSIDAdvertisementEnabled": true,
-						"Security":                 map[string]any{"ModeEnabled": securityMode, "KeyPassPhrase": pass},
-						"MACFiltering":             map[string]any{"Mode": "Off"},
-						"WPS":                      map[string]any{"Enable": false},
-					}
-				}
-
-				params := map[string]any{
-					"mibs": map[string]any{"wlanvap": wlanvap},
-				}
-				_, err = executeRequest(address, contextID, cookie, "NeMo.Intf.lan", "setWLANConfig", params)
-				if err != nil {
-					return fmt.Errorf("failed to set WLAN config: %w", err)
-				}
-
-				fmt.Println("WLAN configuration updated successfully")
-				return nil
-			},
-		}
-
-		cmd.Flags().StringVar(&ssid, "ssid", "", "WLAN SSID")
-		cmd.Flags().StringVar(&pass, "pass", "", "WLAN password")
-		if err := cmd.MarkFlagRequired("ssid"); err != nil {
-			panic(err) // MarkFlagRequired only returns an error when the flag does not exist
-		}
-		return cmd
-	}()
-
 	cmd.AddCommand(
-		wlanEnableCmd,
-		wlanDisableCmd,
-		wlanConfigCmd,
+		wifiStatusCmd(),
+		wifiWriteCmd("enable", "Enable WLAN"),
+		wifiWriteCmd("disable", "Disable WLAN"),
+		wifiWriteCmd("config", "Configure WLAN settings"),
 	)
 
 	return cmd
 }
 
-// Action = "enable" or "disable".
-func enableDisableWLANCmd(ghz5, ghz24 *bool, action string) func(cmd *cobra.Command, args []string) error {
-	return func(cmd *cobra.Command, args []string) error {
-		config, err := loadConfig()
-		if err != nil {
-			return err
-		}
-		address, username, password := mergeFlagsWithConfig(config)
+func wifiStatusCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "status",
+		Short: "Show the Wi-Fi configuration",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return wifiStatus(cmd)
+		},
+	}
+}
 
-		contextID, cookie, err := authenticate(address, username, password)
-		if err != nil {
-			return err
-		}
+func wifiStatus(cmd *cobra.Command) error {
+	client, err := clientFromConfig(cmd.Context())
+	if err != nil {
+		return err
+	}
 
-		// If neither 2.4GHz nor 5GHz is specified, apply to both.
-		if !*ghz24 && !*ghz5 {
-			*ghz24 = true
-			*ghz5 = true
-		}
+	wlan, err := client.WLAN(cmd.Context())
+	if err != nil {
+		return err
+	}
 
-		enable := false
-		if action == "enable" {
-			enable = true
+	rows := make([][]string, 0, len(wlan.SSIDs))
+	for _, ssid := range wlan.SSIDs {
+		enabled := "no"
+		if ssid.Enabled {
+			enabled = "yes"
 		}
+		hidden := "no"
+		if ssid.Hidden {
+			hidden = "yes"
+		}
+		rows = append(rows, []string{ssid.Band, ssid.SSID, enabled, hidden, ssid.Security, ssid.Key})
+	}
+	printTable([]string{"Band", "SSID", "Enabled", "Hidden", "Security", "Key"}, rows)
+	return nil
+}
 
-		penable := make(map[string]any)
-		if *ghz5 {
-			penable["eth4"] = map[string]any{
-				"Enable":           enable,
-				"PersistentEnable": true,
-				"Status":           true,
-			}
-		}
-		if *ghz24 {
-			penable["wl0"] = map[string]any{
-				"Enable":           enable,
-				"PersistentEnable": true,
-				"Status":           true,
-			}
-		}
-
-		params := map[string]any{
-			"mibs": map[string]any{
-				"penable": penable,
-			},
-		}
-
-		_, err = executeRequest(address, contextID, cookie, "NeMo.Intf.lan", "setWLANConfig", params)
-		if err != nil {
-			return fmt.Errorf("failed to set WLAN config: %w", err)
-		}
-
-		return nil
+func wifiWriteCmd(use, short string) *cobra.Command {
+	return &cobra.Command{
+		Use:                use,
+		Short:              short,
+		FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return errLivebox6WriteNotImplemented
+		},
 	}
 }
 
 func dnsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "dns",
-		Short: "Set the name of a device",
-		Long: undent.Undent(`
-			Set the name of a device.
-		`),
+		Short: "Manage static DNS entries",
 		Example: undent.Undent(`
-			dns set D8:10:68:8A:F0:D2 foobar
+			dns ls
 		`),
 	}
-	cmd.AddCommand(dnsSetCmd(), dnsLsCmd())
-	return cmd
-}
-
-func dnsSetCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "set",
-		Short: "Set the name of a device",
-		Long: undent.Undent(`
-			Set the name of a device.
-		`),
-		Example: undent.Undent(`
-			dns set D8:10:68:8A:F0:D2 foobar
-		`),
-		Args: cobra.ExactArgs(2),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			config, err := loadConfig()
-			if err != nil {
-				return err
-			}
-			address, username, password := mergeFlagsWithConfig(config)
-
-			contextID, cookie, err := authenticate(address, username, password)
-			if err != nil {
-				return err
-			}
-
-			mac := strings.ToLower(args[0]) // API handles mac address in lower case
-			name := args[1]
-
-			// Example:
-			// {"service":"Devices.Device.D8:10:68:8A:F0:D2","method":"setName","parameters":{"name":"my-custom-name","source":"dns"}}
-			_, err = executeRequest(address, contextID, cookie, "Devices.Device."+mac, "setName", map[string]any{
-				"name":   name,
-				"source": "dns",
-			})
-			if err != nil {
-				return fmt.Errorf("failed to set name: %w", err)
-			}
-
-			return nil
-		},
-	}
+	cmd.AddCommand(dnsLsCmd(), dnsSetCmd())
 	return cmd
 }
 
 func dnsLsCmd() *cobra.Command {
-	cmd := &cobra.Command{
+	return &cobra.Command{
 		Use:   "ls",
-		Short: "List all devices",
-		Long: undent.Undent(`
-			List all devices.
-		`),
-		Example: undent.Undent(`
-			dns ls
-		`),
+		Short: "List all static DNS entries",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			config, err := loadConfig()
-			if err != nil {
-				return err
-			}
-			address, username, password := mergeFlagsWithConfig(config)
-
-			contextID, cookie, err := authenticate(address, username, password)
+			client, err := clientFromConfig(cmd.Context())
 			if err != nil {
 				return err
 			}
 
-			devices, err := getDevices(address, contextID, cookie)
+			records, err := client.DNSRecords(cmd.Context())
 			if err != nil {
-				return fmt.Errorf("failed to get devices: %w", err)
+				return err
 			}
 
-			// Let's sort the devices by IPv4 address.
-			slices.SortFunc(devices, func(a, b Dev) int {
-				aAddr, _ := netip.ParseAddr(a.IPv4)
-				bAddr, _ := netip.ParseAddr(b.IPv4)
-				return aAddr.Compare(bAddr)
-			})
-
-			// Let's remove devices that don't have an IP.
-			devices = slices.DeleteFunc(devices, func(dev Dev) bool {
-				return dev.IPv4 == "" && dev.IPv6 == ""
-			})
-
-			var rows [][]string
-			for _, dev := range devices {
-				rows = append(rows, []string{
-					dev.IPv4,
-					dev.MacAddress,
-					strings.Join(dev.Names, ", "),
-				})
+			rows := make([][]string, 0, len(records))
+			for _, record := range records {
+				rows = append(rows, []string{record.Hostname, record.IP})
 			}
-			t := table.New().
-				Border(lipgloss.NormalBorder()).
-				Headers("IP address", "MAC address", "DNS Names").
-				Rows(rows...)
-
-			fmt.Println(t.String())
-
+			printTable([]string{"Hostname", "IP address"}, rows)
 			return nil
 		},
 	}
-	return cmd
 }
 
-// Livebox wants 'Host: livebox' or 'Host: 192.168.1.1'. Otherwise, you will get
-// 'EOF' or 'Empty reply from server'.
-func setHostHeader(req *http.Request) {
-	if strings.HasPrefix(req.Host, "192.168.1.1") || strings.HasPrefix(req.Host, "livebox") {
-		return
+func dnsSetCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "set",
+		Short: "Set the name of a device",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return errLivebox6WriteNotImplemented
+		},
 	}
-
-	// Color 'Warning' in yellow, rest of the text in default color.
-	_, _ = fmt.Fprintf(os.Stderr, "\033[33mWarning\033[0m: the hostname in the address '%s' doesn't match '192.168.1.1' or 'livebox'.\n"+
-		"You will see 'server closed connection' or 'Empty reply from server' errors because Livebox expects \n"+
-		"'Host: livebox' or 'Host: 192.168.1.1'.\n", req.Host)
 }

@@ -45,6 +45,20 @@ livebox speed              # WAN sync rates (DSL only; not available on fiber)
 livebox api <cgi-page>     # Raw cgi data file, e.g. livebox api nat_osp
 ```
 
+## What works (write)
+
+Reverse-engineered from browser HAR captures (`apply_abstract.cgi` with
+AES-obfuscated fields); each command mirrors the web UI form:
+
+```sh
+livebox port-forward set --description ssh --public-port 22 --ip 192.168.1.10 [--private-port 22] [--protocol tcp|udp]
+livebox port-forward rm ssh
+livebox static-lease set --mac aa:bb:cc:dd:ee:ff --ip 192.168.1.10 [--name nas]
+livebox static-lease rm aa:bb:cc:dd:ee:ff
+livebox dns set nas 192.168.1.10
+livebox dns rm nas
+```
+
 ## Not yet implemented (write)
 
 The following commands return a clear error until the corresponding
@@ -53,10 +67,7 @@ The following commands return a clear error until the corresponding
 ```sh
 livebox reboot
 livebox wifi enable|disable|config
-livebox port-forward set|rm
 livebox dmz set|rm
-livebox static-lease set|rm
-livebox dns set
 livebox pinhole ls|set|rm
 livebox phone
 ```
